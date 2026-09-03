@@ -1,0 +1,12 @@
+data/
+backups/
+reference/
+web/frontend/node_modules/
+web/dist/*
+!web/dist/.gitkeep
+*.exe
+*.log
+.env
+plan.md
+__pycache__/
+.wrangler/

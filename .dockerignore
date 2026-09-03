@@ -1,0 +1,11 @@
+.git
+data/
+backups/
+reference/
+docs/
+web/frontend/node_modules
+web/dist
+*.exe
+*.log
+.env
+.claude

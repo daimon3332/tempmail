@@ -1,0 +1,36 @@
+services:
+  tempmail:
+    build: .
+    image: tempmail:latest
+    container_name: tempmail
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "25:25"
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./data:/data
+      - ./backups:/backups:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: tempmail-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - tempmail
+
+volumes:
+  caddy_data:
+  caddy_config:

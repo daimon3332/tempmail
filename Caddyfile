@@ -1,0 +1,10 @@
+# Sits behind the Cloudflare proxy (orange cloud). Cloudflare terminates TLS
+# to the visitor; origin serves HTTP on 80. If you switch to DNS-only, replace
+# ":80" with the hostname and Caddy will obtain a Let's Encrypt cert.
+{
+	auto_https off
+}
+:80 {
+	encode gzip
+	reverse_proxy tempmail:8080
+}
