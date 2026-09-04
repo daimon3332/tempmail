@@ -66,9 +66,14 @@ via a Cloudflare worker that forwards to the same origin.
 ## Run
 
 ```bash
-cp .env.example .env   # set DOMAINS, ADMIN_PASSWORDS, JWT_SECRET, INGEST_TOKEN
-docker compose up -d --build
+bash deploy.sh         # creates .env from .env.example when missing, then uses docker compose
+# edit .env before exposing the service; existing .env is never overwritten
 ```
+
+The deployment is local and does not require an SSH server or a server address. `deploy.sh` validates the
+Compose file, builds the image, optionally imports SQL files found in `backups/d1/`, starts the container, and
+checks `/health`. To operate Compose manually, create `.env` once with `cp .env.example .env`, then run
+`docker compose up -d --build`.
 
 Import an existing D1 database (once):
 
@@ -78,7 +83,7 @@ docker compose run --rm --no-deps tempmail -import /backups/d1/main.sql         
 docker compose run --rm --no-deps tempmail -import /backups/d1/other.sql -merge  # fold in a second db
 ```
 
-`deploy.sh` syncs sources, builds, and restarts; `workers/deploy.sh` publishes the Cloudflare workers.
+`workers/deploy.sh` publishes the optional Cloudflare workers separately.
 
 ## Frontend
 
