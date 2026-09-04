@@ -1,6 +1,7 @@
 services:
   tempmail:
     image: ghcr.io/daimon3332/tempmail:latest
+    pull_policy: always
     container_name: tempmail
     restart: unless-stopped
     env_file: .env
