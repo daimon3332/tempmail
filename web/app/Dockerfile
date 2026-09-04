@@ -6,7 +6,7 @@ RUN corepack enable && corepack prepare pnpm@10 --activate
 COPY web/app/package.json web/app/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY web/app/ ./
-RUN VITE_OUT_DIR=/out pnpm build
+RUN pnpm build
 
 FROM golang:1.25-alpine AS backend
 WORKDIR /src
@@ -14,7 +14,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN rm -rf web/dist && mkdir -p web/dist
-COPY --from=frontend /out/ web/dist/
+COPY --from=frontend /dist/ web/dist/
 ARG VERSION=dev
 RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /tempmail ./cmd/tempmail
 

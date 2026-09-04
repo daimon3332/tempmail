@@ -10,3 +10,8 @@ web/dist/*
 plan.md
 __pycache__/
 .wrangler/
+
+# frontend
+web/app/node_modules/
+web/dist/*
+!web/dist/.gitkeep

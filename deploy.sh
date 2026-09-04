@@ -13,8 +13,9 @@ cd "$(dirname "$0")"
 [ -f .env ] || { echo ".env missing (copy .env.example)"; exit 1; }
 
 echo "== sync sources"
-tar --exclude=.git --exclude=data --exclude=reference --exclude='web/frontend/node_modules' \
-    --exclude='web/dist' --exclude='*.exe' --exclude='*.log' --exclude='backups' -czf - . \
+tar --exclude=.git --exclude=data --exclude=reference \
+    --exclude='web/dist' --exclude='*.exe' --exclude='*.log' --exclude='backups' \
+    --exclude='node_modules' -czf - . \
   | $SSH "mkdir -p $DIR && tar -xzf - -C $DIR"
 
 echo "== sync D1 dumps (only if not present)"
