@@ -28,6 +28,13 @@ func (a *App) ensureDefaultBalance(ctx context.Context, address string) {
 
 func (a *App) sendBalanceState(r *http.Request, address string, isAdmin, initDefault bool) sendBalanceState {
 	ctx := r.Context()
+	if !isAdmin {
+		if u := userOf(r); u != nil {
+			if l, ok := a.roles.UserLimits(ctx, claimInt(u, "user_id")); ok && !l.CanSendMail {
+				return sendBalanceState{needCheckBalance: true}
+			}
+		}
+	}
 	role := userRoleOf(r)
 	noLimitRole := role != "" && contains(a.cfg.NoLimitSendRole, role)
 	if !noLimitRole && role != "" {
@@ -241,7 +248,7 @@ func (a *App) apiSendbox(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) apiDeleteSendbox(w http.ResponseWriter, r *http.Request) {
-	if !a.cfg.EnableUserDeleteEmail {
+	if !a.effective(r.Context()).EnableUserDeleteEmail {
 		text(w, 403, "User delete email is disabled")
 		return
 	}

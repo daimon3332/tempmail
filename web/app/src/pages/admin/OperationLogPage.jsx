@@ -11,7 +11,7 @@ export default function OperationLogPage() {
         <h2 className="text-xl font-semibold">操作日志</h2>
         <Button size="sm" variant="destructive" onClick={() => { if (confirm('清空日志？')) { api('/admin/operation_log', 'DELETE'); q.refetch() } }}>清空</Button>
       </div>
-      <PagedTable path="/admin/operation_log" queryKey="oplog" pageSize={30}
+      <PagedTable path="/admin/operation_log" queryKey="oplog"
         filters={({ setExtra, extra }) => <Input className="max-w-xs" placeholder="按操作/目标过滤" value={extra.target || ''} onChange={e => setExtra(x => ({ ...x, target: e.target.value }))} />}
         columns={[
           { key: 'id', title: 'ID' },

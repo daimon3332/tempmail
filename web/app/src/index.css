@@ -21,6 +21,7 @@
   --input: 214.3 31.8% 91.4%;
   --ring: 199 89% 48%;
   --radius: 0.5rem;
+  --surface: 0 0% 98%;
 }
 
 .dark {
@@ -41,11 +42,39 @@
   --border: 217.2 32.6% 20%;
   --input: 217.2 32.6% 20%;
   --ring: 199 89% 48%;
+  --surface: 222.2 47.4% 7%;
 }
 
 @layer base {
   * { @apply border-border; }
-  body { @apply bg-background text-foreground antialiased; }
+  body { @apply bg-background text-foreground antialiased; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+}
+
+@layer components {
+  .app-shell { background: hsl(var(--surface)); }
+  .app-header { @apply sticky top-0 z-30 flex h-14 items-center gap-4 border-b border-border bg-background/95 px-4 backdrop-blur sm:px-6; }
+  .app-main { min-height: calc(100vh - 3.5rem); }
+  .brand-mark { @apply flex shrink-0 items-center gap-2 text-sm font-semibold tracking-tight; }
+  .brand-icon { @apply flex h-7 w-7 items-center justify-center rounded-md bg-primary text-primary-foreground; }
+  .top-nav { @apply inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground; }
+  .top-nav.is-active { @apply bg-accent text-foreground; }
+  .icon-button { @apply inline-flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring; }
+  .mobile-nav { @apply flex border-b border-border bg-background px-3 py-1; }
+  .mobile-nav a { @apply flex flex-1 items-center justify-center gap-1 py-2 text-xs text-muted-foreground; }
+  .mobile-nav a.is-active { @apply font-medium text-primary; }
+  .mail-workspace { @apply grid min-h-[calc(100vh-3.5rem)] grid-cols-[15rem_22rem_minmax(0,1fr)] bg-background; }
+  .mail-sidebar { @apply flex flex-col gap-3 border-r border-border bg-background p-4; }
+  .mail-list { @apply flex min-w-0 flex-col border-r border-border bg-background; }
+  .mail-detail { @apply min-w-0 overflow-auto bg-background; }
+  .mail-frame { @apply min-h-[420px] w-full rounded-md border border-border bg-white; }
+  .admin-workspace { @apply grid min-h-[calc(100vh-3.5rem)] grid-cols-[14rem_minmax(0,1fr)] bg-background; }
+  .admin-sidebar { @apply border-r border-border bg-muted/30 p-3; }
+  .admin-nav { @apply flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground; }
+  .admin-nav.is-active { @apply bg-primary text-primary-foreground hover:bg-primary; }
+  .admin-content { @apply min-w-0 overflow-auto p-4 sm:p-6; }
+  @media (max-width: 900px) { .mail-workspace { grid-template-columns: 13rem minmax(0,1fr); } .mail-detail { display:none; } }
+  @media (max-width: 640px) { .mail-workspace { display:block; min-height:calc(100vh - 7rem); } .mail-sidebar { border-right:0; border-bottom:1px solid hsl(var(--border)); } .mail-list { min-height:55vh; border-right:0; } .mail-detail { display:block; min-height:55vh; } .mail-workspace.has-detail .mail-list { display:none; } }
+  @media (max-width: 640px) { .admin-workspace { display:block; min-height:calc(100vh - 7rem); } .admin-sidebar { display:flex; gap:0.25rem; overflow-x:auto; border-right:0; border-bottom:1px solid hsl(var(--border)); padding:0.5rem; } .admin-sidebar > div:first-child, .admin-sidebar > div:last-child { display:none; } .admin-sidebar > div:nth-child(2) { display:flex; gap:0.25rem; } .admin-nav { width:auto; white-space:nowrap; padding:0.5rem 0.65rem; } .admin-nav svg { display:none; } }
 }
 
 @layer utilities {

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Plus, RefreshCw, Copy, Mail, Inbox, CloudDownload, Fullscreen, X } from 'lucide-react'
+import { Plus, RefreshCw, Copy, Mail, Inbox, Trash2, X, Send } from 'lucide-react'
 import Layout from '../components/Layout'
 import { Button, Input, Spinner, Badge, Select, Modal } from '../components/ui'
 import { useApp } from '../context/AppContext'
@@ -16,17 +16,19 @@ export default function MailPage() {
   const [showNew, setShowNew] = useState(false)
   const [showLogin, setShowLogin] = useState(!state.address)
   const [showSend, setShowSend] = useState(false)
+  const [page, setPage] = useState(0)
+  const pageSize = 100
 
   const settingsQ = useQuery({ queryKey: ['open_settings'], queryFn: () => api('/open_api/settings').then(r => r.data) })
 
   const mailsQ = useQuery({
-    queryKey: ['mails', address, tab],
+    queryKey: ['mails', address, tab, page],
     enabled: !!address,
     // If we have no address JWT but an address is set, prompt login instead.
-    refetchInterval: tab === 'inbox' ? 60000 : false,
+    refetchInterval: tab === 'inbox' ? 30000 : false,
     queryFn: async () => {
       const path = tab === 'inbox' ? '/api/parsed_mails' : '/api/sendbox'
-      const r = await api(`${path}?limit=50&offset=0`)
+      const r = await api(`${path}?limit=${pageSize}&offset=${page * pageSize}`)
       if (r.status === 401) { setShowLogin(true); throw new Error('unauthorized') }
       if (r.status === 400 && path === '/api/parsed_mails') { setShowLogin(true); throw new Error('not-logged') }
       return r.data
@@ -35,37 +37,37 @@ export default function MailPage() {
 
   useEffect(() => {
     if (!address || !state.addressJwt) return
-    const es = new EventSource(`/events?address=${encodeURIComponent(address)}`)
-    es.onmessage = () => { mailsQ.refetch() }
+    const es = new EventSource(`/events?address=${encodeURIComponent(address)}&token=${encodeURIComponent(state.addressJwt)}`)
+    es.addEventListener('mail', () => mailsQ.refetch())
     es.onerror = () => { es.close(); }
     return () => es.close()
   }, [address])
-  useEffect(() => { setSelected(null); setSelectedBody(null) }, [address])
+  useEffect(() => { setSelected(null); setSelectedBody(null); setPage(0) }, [address, tab])
 
   const openMail = async (id) => {
     const r = await api(`/api/parsed_mail/${id}`)
-    if (r.status === 200) { setSelected(id); setSelectedBody(r.data) }
+    if (r.status === 200) {
+      setSelected(id); setSelectedBody(r.data)
+      if (r.data?.is_unread) api(`/api/mails/${id}/read`, 'POST', { isUnread: false })
+    }
   }
 
   return (
     <Layout>
-      <div className="flex h-[calc(100vh-3.5rem)]">
+      <div className={`mail-workspace ${selectedBody ? 'has-detail' : ''}`}>
         {/* sidebar */}
-        <aside className="flex w-60 flex-col border-r border-border p-3">
+        <aside className="mail-sidebar">
           <div className="mb-3 flex items-center gap-2">
             <Inbox className="h-4 w-4 text-primary" />
             <span className="font-semibold">{t('mail')}</span>
           </div>
-          <div className="flex gap-1 text-sm">
+          <div className="grid grid-cols-2 gap-1 text-sm">
             <Button size="sm" variant={tab === 'inbox' ? 'default' : 'ghost'} className="flex-1" onClick={() => setTab('inbox')}>{t('inbox')}</Button>
             <Button size="sm" variant={tab === 'sent' ? 'default' : 'ghost'} className="flex-1" onClick={() => setTab('sent')}>{t('sent')}</Button>
           </div>
           <div className="mt-3 space-y-2">
-            <Button className="w-full justify-start" variant="outline" onClick={() => setShowNew(true)}>
-              <Plus className="h-4 w-4" /> {t('newAddress')}
-            </Button>
             {state.address && (
-              <div className="rounded-lg border border-border p-2 text-xs">
+              <div className="rounded-md border border-border bg-background p-3 text-xs">
                 <div className="mb-1 flex items-center justify-between">
                   <span className="font-medium">{t('address')}</span>
                   <button className="text-muted-foreground hover:text-destructive" onClick={() => { clearAddress(); setShowLogin(true) }}>
@@ -74,8 +76,8 @@ export default function MailPage() {
                 </div>
                 <div className="break-all text-muted-foreground">{address}</div>
                 <div className="mt-2 flex gap-1">
-                  <Button size="sm" variant="ghost" onClick={() => setShowSend(true)}>{t('send')}</Button>
-                  <Button size="sm" variant="ghost" onClick={() => mailsQ.refetch()}><RefreshCw className="h-3.5 w-3.5" /></Button>
+                  <Button size="sm" variant="outline" onClick={() => setShowSend(true)}><Send className="h-3.5 w-3.5" />{t('send')}</Button>
+                  <Button size="sm" variant="ghost" title={t('refresh')} onClick={() => mailsQ.refetch()}><RefreshCw className="h-3.5 w-3.5" /></Button>
                 </div>
               </div>
             )}
@@ -83,7 +85,7 @@ export default function MailPage() {
         </aside>
 
         {/* mail list */}
-        <section className="flex w-[360px] flex-col border-r border-border">
+        <section className="mail-list">
           <div className="flex items-center justify-between border-b border-border px-4 py-2">
             <span className="text-sm font-medium">{t(tab === 'inbox' ? 'inbox' : 'sent')}</span>
             <Button size="sm" variant="ghost" onClick={() => mailsQ.refetch()}><RefreshCw className="h-4 w-4" /></Button>
@@ -97,10 +99,11 @@ export default function MailPage() {
               <MailRow key={m.id} m={m} active={selected === m.id} onClick={() => openMail(m.id)} t={t} />
             ))}
           </div>
+          {!mailsQ.isLoading && <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-4 py-2 text-xs text-muted-foreground"><span>共 {mailsQ.data?.count || 0} 条 · 第 {mailsQ.data?.count ? page + 1 : 0} / {mailsQ.data?.count ? Math.ceil(mailsQ.data.count / pageSize) : 0} 页</span><div className="flex gap-1"><Button size="sm" variant="outline" disabled={page <= 0} onClick={() => setPage(0)}>首页</Button><Button size="sm" variant="outline" disabled={page <= 0} onClick={() => setPage(p => p - 1)}>上一页</Button><Button size="sm" variant="outline" disabled={!mailsQ.data?.count || page >= Math.ceil(mailsQ.data.count / pageSize) - 1} onClick={() => setPage(p => p + 1)}>下一页</Button><Button size="sm" variant="outline" disabled={!mailsQ.data?.count || page >= Math.ceil(mailsQ.data.count / pageSize) - 1} onClick={() => setPage(Math.max(0, Math.ceil(mailsQ.data.count / pageSize) - 1))}>末页</Button></div></div>}
         </section>
 
         {/* mail detail */}
-        <section className="flex-1 overflow-auto">
+        <section className="mail-detail">
           {!selectedBody && <EmptyDetail t={t} />}
           {selectedBody && <MailDetail m={selectedBody} onClose={() => { setSelected(null); setSelectedBody(null) }} t={t} />}
         </section>
@@ -155,8 +158,9 @@ function MailDetail({ m, onClose, t }) {
         <span className="truncate text-lg font-semibold">{m.subject || t('noSubject')}</span>
         <div className="ml-auto flex gap-1">
           <Button size="sm" variant="ghost" onClick={copy}><Copy className="h-4 w-4" /> {t('copy')}</Button>
-          <Button size="sm" variant="ghost" onClick={() => window.print()}><Fullscreen className="h-4 w-4" /> {t('textOnly')}</Button>
-          <Button size="sm" variant="ghost" onClick={onClose}><X className="h-4 w-4" /></Button>
+          <Button size="sm" variant="ghost" onClick={() => window.print()}>{t('textOnly')}</Button>
+          <Button size="sm" variant="ghost" title={t('cancel')} onClick={onClose}><X className="h-4 w-4" /></Button>
+          <Button size="sm" variant="ghost" title={t('delete')} onClick={async () => { if (confirm(t('deleteMail'))) { await api(`/api/mails/${m.id}`, 'DELETE'); onClose() } }}><Trash2 className="h-4 w-4" /></Button>
         </div>
       </div>
       <div className="flex flex-wrap gap-x-6 gap-y-1 border-b border-border px-5 py-2 text-xs text-muted-foreground">
@@ -165,7 +169,7 @@ function MailDetail({ m, onClose, t }) {
       </div>
       <div className="flex-1 overflow-auto p-5">
         {m.html && m.html.trim() ? (
-          <div ref={bodyRef} className="text-sm [&_a]:text-primary [&_a]:underline [&_img]:max-w-full" dangerouslySetInnerHTML={{ __html: m.html }} />
+          <iframe title={m.subject || t('mail')} sandbox="allow-popups" srcDoc={`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data: cid:; style-src 'unsafe-inline'; font-src data:"><base target="_blank">${m.html}`} className="mail-frame" />
         ) : (
           <div ref={bodyRef} className="whitespace-pre-wrap text-sm">{m.text}</div>
         )}
@@ -174,7 +178,7 @@ function MailDetail({ m, onClose, t }) {
             <div className="text-sm font-medium">{t('attachments') || 'Attachments'}</div>
             {m.attachments.map((a, i) => (
               <div key={i} className="flex items-center gap-2 rounded-lg border border-border p-2 text-sm">
-                <CloudDownload className="h-4 w-4" /> {a.filename}
+                <span className="truncate">{a.filename}</span>
                 <span className="text-xs text-muted-foreground">{(a.size / 1024).toFixed(1)} KB</span>
               </div>
             ))}
@@ -192,7 +196,7 @@ function LoginModal({ onClose, setAddr, t }) {
     const r = await api('/open_api/credential_login', 'POST', { credential: value.trim() })
     if (r.status === 200) {
       try {
-        const payload = JSON.parse(atob(value.trim().split('.')[1]))
+        const payload = JSON.parse(atob(value.trim().split('.')[1].replace(/-/g, '+').replace(/_/g, '/')))
         setAddress(payload.address, value.trim())
         setAddr(payload.address)
         onClose()
@@ -232,7 +236,7 @@ function NewAddressModal({ settings, setAddr, onClose, t }) {
           </div>
           <span className="text-muted-foreground">@</span>
           <Select value={domain} onChange={(e) => setDomain(e.target.value)}>
-            {(settings?.domains || []).map((d) => <option key={d} value={d}>{d}</option>)}
+            {(settings?.defaultDomains || settings?.domains || []).map((d) => <option key={d} value={d}>{d}</option>)}
           </Select>
         </div>
         {err && <p className="text-xs text-destructive">{err}</p>}

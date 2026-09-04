@@ -22,6 +22,10 @@ func (a *App) adminRoutes() {
 	m.HandleFunc("POST /admin/address/{id}/reset_password", a.adminResetAddressPassword)
 
 	m.HandleFunc("GET /admin/mails", a.adminMails)
+	m.HandleFunc("GET /admin/workspace_mails", a.workspaceMails)
+	m.HandleFunc("GET /admin/workspace_mail/{id}", a.workspaceParsedMail)
+	m.HandleFunc("PATCH /admin/workspace_mail/{id}/read", a.workspaceMarkRead)
+	m.HandleFunc("DELETE /admin/workspace_mail/{id}", a.workspaceDeleteMail)
 	m.HandleFunc("GET /admin/mails_unknow", a.adminUnknownMails)
 	m.HandleFunc("GET /admin/mails/{id}", a.adminGetMail)
 	m.HandleFunc("DELETE /admin/mails/{id}", a.adminDeleteMail)
@@ -35,6 +39,9 @@ func (a *App) adminRoutes() {
 	m.HandleFunc("GET /admin/statistics", a.adminStatistics)
 	m.HandleFunc("GET /admin/account_settings", a.adminGetAccountSettings)
 	m.HandleFunc("POST /admin/account_settings", a.adminSaveAccountSettings)
+	m.HandleFunc("GET /admin/auto_reply/rules", a.adminListAutoReplyRules)
+	m.HandleFunc("POST /admin/auto_reply/rules", a.adminSaveAutoReplyRule)
+	m.HandleFunc("DELETE /admin/auto_reply/rules/{id}", a.adminDeleteAutoReplyRule)
 	m.HandleFunc("POST /admin/cleanup", a.adminCleanup)
 	m.HandleFunc("GET /admin/auto_cleanup", a.adminGetAutoCleanup)
 	m.HandleFunc("POST /admin/auto_cleanup", a.adminSaveAutoCleanup)
@@ -42,15 +49,20 @@ func (a *App) adminRoutes() {
 	m.HandleFunc("GET /admin/user_settings", a.adminGetUserSettings)
 	m.HandleFunc("POST /admin/user_settings", a.adminSaveUserSettings)
 	m.HandleFunc("GET /admin/users", a.adminUsers)
+	m.HandleFunc("GET /admin/users/{user_id}", a.adminGetUser)
+	m.HandleFunc("PATCH /admin/users/{user_id}", a.adminPatchUser)
 	m.HandleFunc("DELETE /admin/users/{user_id}", a.adminDeleteUser)
 	m.HandleFunc("POST /admin/users", a.adminCreateUser)
 	m.HandleFunc("POST /admin/users/{user_id}/reset_password", a.adminResetUserPassword)
+	m.HandleFunc("GET /admin/user_limits/{user_id}", a.adminGetUserLimits)
+	m.HandleFunc("PATCH /admin/user_limits/{user_id}", a.adminSaveUserLimits)
 	m.HandleFunc("GET /admin/user_roles", a.adminUserRoles)
 	m.HandleFunc("POST /admin/user_roles", a.adminUpdateUserRole)
 	m.HandleFunc("GET /admin/role_address_config", a.adminGetRoleAddressConfig)
 	m.HandleFunc("POST /admin/role_address_config", a.adminSaveRoleAddressConfig)
 	m.HandleFunc("GET /admin/users/bind_address/{user_id}", a.adminBindedAddresses)
 	m.HandleFunc("POST /admin/users/bind_address", a.adminBindAddress)
+	m.HandleFunc("POST /admin/users/unbind_address", a.adminUnbindAddress)
 
 	// dynamic roles (extension)
 	m.HandleFunc("GET /admin/roles", a.adminListRoles)
@@ -64,6 +76,7 @@ func (a *App) adminRoutes() {
 	m.HandleFunc("GET /admin/mail_webhook/settings", a.adminGetMailWebhook)
 	m.HandleFunc("POST /admin/mail_webhook/settings", a.adminSaveMailWebhook)
 	m.HandleFunc("POST /admin/mail_webhook/test", a.adminTestMailWebhook)
+	m.HandleFunc("GET /admin/mail_webhook/deliveries", a.adminMailWebhookDeliveries)
 	m.HandleFunc("GET /admin/worker/configs", a.adminWorkerConfig)
 	m.HandleFunc("POST /admin/send_mail", a.adminSendMail)
 	m.HandleFunc("POST /admin/send_mail_by_binding", a.adminSendMail)
@@ -95,6 +108,79 @@ func (a *App) adminRoutes() {
 	m.HandleFunc("POST /admin/ai_extract/settings", a.adminSaveAIExtract)
 }
 
+func (a *App) adminMailWebhookDeliveries(w http.ResponseWriter, r *http.Request) {
+	limit := atoi(r.URL.Query().Get("limit"))
+	if limit < 1 || limit > 100 {
+		limit = 20
+	}
+	rows, err := a.db.Query(r.Context(), `SELECT id,event_id,endpoint,attempt,status_code,error,created_at FROM webhook_deliveries ORDER BY id DESC LIMIT ?`, limit)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	jsonResp(w, 200, map[string]any{"results": rows, "count": len(rows)})
+}
+
+func (a *App) adminListAutoReplyRules(w http.ResponseWriter, r *http.Request) {
+	rows, err := a.db.Query(r.Context(), `SELECT id, address, name, source_prefix, subject, message, enabled, created_at FROM auto_reply_mails ORDER BY address`)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	jsonResp(w, 200, map[string]any{"results": rows, "count": len(rows)})
+}
+
+func (a *App) adminSaveAutoReplyRule(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID           int64  `json:"id"`
+		Address      string `json:"address"`
+		Name         string `json:"name"`
+		SourcePrefix string `json:"source_prefix"`
+		Subject      string `json:"subject"`
+		Message      string `json:"message"`
+		Enabled      bool   `json:"enabled"`
+	}
+	if err := readJSON(r, &req); err != nil || strings.TrimSpace(req.Address) == "" {
+		text(w, 400, "address is required")
+		return
+	}
+	if len(req.Subject) > 255 || len(req.Message) > 255 {
+		text(w, 400, "Subject or message too long")
+		return
+	}
+	address := strings.ToLower(strings.TrimSpace(req.Address))
+	if _, found, _ := a.db.ScanInt(r.Context(), `SELECT id FROM address WHERE name=?`, address); !found {
+		text(w, 400, "Mailbox does not exist")
+		return
+	}
+	if req.ID > 0 {
+		_, err := a.db.Exec(r.Context(), `UPDATE auto_reply_mails SET address=?, name=?, source_prefix=?, subject=?, message=?, enabled=? WHERE id=?`, address, req.Name, req.SourcePrefix, req.Subject, req.Message, boolInt(req.Enabled), req.ID)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+	} else {
+		_, err := a.db.Exec(r.Context(), `INSERT INTO auto_reply_mails(address,name,source_prefix,subject,message,enabled) VALUES(?,?,?,?,?,?) ON CONFLICT(address) DO UPDATE SET name=excluded.name,source_prefix=excluded.source_prefix,subject=excluded.subject,message=excluded.message,enabled=excluded.enabled`, address, req.Name, req.SourcePrefix, req.Subject, req.Message, boolInt(req.Enabled))
+		if err != nil {
+			fail(w, err)
+			return
+		}
+	}
+	ok(w)
+}
+
+func (a *App) adminDeleteAutoReplyRule(w http.ResponseWriter, r *http.Request) {
+	_, err := a.db.Exec(r.Context(), `DELETE FROM auto_reply_mails WHERE id=?`, atoi(r.PathValue("id")))
+	jsonResp(w, 200, map[string]bool{"success": err == nil})
+}
+
+func boolInt(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
+}
+
 func mailerBuild(fromName, from, to, subject, content string) []byte {
 	return mailer.Build(mailer.Message{FromName: fromName, From: from, To: to, Subject: subject, Content: content})
 }
@@ -109,7 +195,7 @@ func (a *App) storeInternalMail(ctx context.Context, to, subject, body string) {
 
 var addressSortColumns = map[string]string{
 	"id": "a.id", "name": "a.name", "created_at": "a.created_at", "updated_at": "a.updated_at",
-	"source_meta": "a.source_meta", "mail_count": "mail_count", "send_count": "send_count",
+	"source_meta": "a.source_meta", "mail_count": "mail_count", "send_count": "send_count", "unread_count": "unread_count", "last_mail_at": "last_mail_at",
 }
 
 func (a *App) adminListAddresses(w http.ResponseWriter, r *http.Request) {
@@ -119,16 +205,29 @@ func (a *App) adminListAddresses(w http.ResponseWriter, r *http.Request) {
 		col = "a.id"
 	}
 	dir := "desc"
-	if q.Get("sort_order") == "ascend" {
+	if q.Get("sort_order") == "asc" || q.Get("sort_order") == "ascend" {
 		dir = "asc"
 	}
-	sel := `SELECT a.*, (SELECT COUNT(*) FROM raw_mails WHERE address = a.name) AS mail_count, (SELECT COUNT(*) FROM sendbox WHERE address = a.name) AS send_count FROM address a`
-	if query := q.Get("query"); query != "" {
-		a.listQuery(w, r, sel+` where instr(name, ?) > 0`, `SELECT count(*) as count FROM address where instr(name, ?) > 0`,
-			[]any{query}, q.Get("limit"), q.Get("offset"), col+" "+dir, "password")
-		return
+	sel := `SELECT a.*, (SELECT COUNT(*) FROM raw_mails WHERE address = a.name) AS mail_count, (SELECT COUNT(*) FROM raw_mails WHERE address = a.name AND COALESCE(is_unread,0)=1) AS unread_count, (SELECT MAX(created_at) FROM raw_mails WHERE address = a.name) AS last_mail_at, (SELECT COUNT(*) FROM sendbox WHERE address = a.name) AS send_count, (SELECT GROUP_CONCAT(u.user_email) FROM users u JOIN users_address ua ON ua.user_id=u.id WHERE ua.address_id=a.id) AS owner_emails FROM address a`
+	where := []string{"1 = 1"}
+	params := []any{}
+	if query := strings.TrimSpace(q.Get("query")); query != "" {
+		where = append(where, "lower(a.name) LIKE lower(?)")
+		params = append(params, "%"+query+"%")
 	}
-	a.listQuery(w, r, sel, `SELECT count(*) as count FROM address`, nil, q.Get("limit"), q.Get("offset"), col+" "+dir, "password")
+	if domain := strings.TrimSpace(strings.TrimPrefix(q.Get("domain"), "@")); domain != "" {
+		where = append(where, "lower(substr(a.name, instr(a.name, '@') + 1)) = lower(?)")
+		params = append(params, domain)
+	}
+	if q.Get("has_mail") == "1" || q.Get("has_mail") == "true" {
+		where = append(where, "EXISTS (SELECT 1 FROM raw_mails rm WHERE rm.address=a.name)")
+	}
+	if q.Get("unread") == "1" || q.Get("unread") == "true" {
+		where = append(where, "EXISTS (SELECT 1 FROM raw_mails rm WHERE rm.address=a.name AND COALESCE(rm.is_unread,0)=1)")
+	}
+	baseWhere := strings.Join(where, " AND ")
+	countQuery := `SELECT count(*) as count FROM address a WHERE ` + baseWhere
+	a.listQuery(w, r, sel+` WHERE `+baseWhere, countQuery, params, q.Get("limit"), q.Get("offset"), col+" "+dir, "password")
 }
 
 func (a *App) adminNewAddress(w http.ResponseWriter, r *http.Request) {
@@ -145,7 +244,7 @@ func (a *App) adminNewAddress(w http.ResponseWriter, r *http.Request) {
 	}
 	res, err := a.newAddress(r.Context(), newAddressOpts{
 		name: req.Name, domain: req.Domain, enablePrefix: truthy(req.EnablePrefix),
-		enableRandomSubdomain: truthy(req.EnableRandomSubdomain), allowDomains: a.cfg.Domains, sourceMeta: "admin",
+		enableRandomSubdomain: truthy(req.EnableRandomSubdomain), allowDomains: a.effective(r.Context()).Domains, sourceMeta: "admin",
 	})
 	if err != nil {
 		text(w, 400, "Failed to create address: "+err.Error())
@@ -188,7 +287,7 @@ func (a *App) adminShowPassword(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) adminResetAddressPassword(w http.ResponseWriter, r *http.Request) {
-	if !a.cfg.EnableAddressPassword {
+	if !a.effective(r.Context()).EnableAddressPassword {
 		text(w, 403, "Password change is disabled")
 		return
 	}
@@ -312,6 +411,11 @@ func (a *App) adminStatistics(w http.ResponseWriter, r *http.Request) {
 		"activeAddressCount30days": count(`SELECT count(*) FROM address where updated_at > datetime('now', '-30 day')`),
 		"userCount":                count(`SELECT count(*) FROM users`),
 		"sendMailCount":            count(`SELECT count(*) FROM sendbox`),
+		"mail_count":               count(`SELECT count(*) FROM raw_mails`),
+		"address_count":            count(`SELECT count(*) FROM address`),
+		"user_count":               count(`SELECT count(*) FROM users`),
+		"sendbox_count":            count(`SELECT count(*) FROM sendbox`),
+		"unread_mail_count":        count(`SELECT count(*) FROM raw_mails WHERE COALESCE(is_unread,0)=1`),
 	})
 }
 
@@ -402,11 +506,18 @@ func (a *App) adminSaveAccountSettings(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) adminCleanup(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		CleanType string `json:"cleanType"`
-		CleanDays int    `json:"cleanDays"`
+		CleanType  string   `json:"cleanType"`
+		CleanTypes []string `json:"cleanTypes"`
+		CleanDays  int      `json:"cleanDays"`
 	}
 	readJSON(r, &req)
-	if err := a.cleanup(r.Context(), req.CleanType, req.CleanDays); err != nil {
+	var err error
+	if len(req.CleanTypes) > 0 {
+		err = a.cleanupTypes(r.Context(), req.CleanTypes, req.CleanDays)
+	} else {
+		err = a.cleanup(r.Context(), req.CleanType, req.CleanDays)
+	}
+	if err != nil {
 		text(w, 500, "Operation failed: "+err.Error())
 		return
 	}
@@ -414,11 +525,7 @@ func (a *App) adminCleanup(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) adminGetAutoCleanup(w http.ResponseWriter, r *http.Request) {
-	var s any
-	if !a.jsonSetting(r.Context(), "auto_cleanup", &s) {
-		jsonResp(w, 200, nil)
-		return
-	}
+	s := a.loadCleanupSettings(r.Context())
 	jsonResp(w, 200, s)
 }
 
@@ -436,6 +543,7 @@ func (a *App) adminSaveAutoCleanup(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	normalizeCleanupSettings(&s)
 	if err := a.saveJSONSetting(r.Context(), "auto_cleanup", s); err != nil {
 		fail(w, err)
 		return
@@ -457,7 +565,7 @@ func (a *App) adminSaveUserSettings(w http.ResponseWriter, r *http.Request) {
 		text(w, 400, "Verify mail sender is not set")
 		return
 	}
-	if s.EnableMailVerify && !contains(a.cfg.Domains, mailDomain(s.VerifyMailSender)) {
+	if s.EnableMailVerify && !contains(a.effective(r.Context()).Domains, mailDomain(s.VerifyMailSender)) {
 		text(w, 400, "Verify mail sender domain is invalid")
 		return
 	}
@@ -477,32 +585,169 @@ func (a *App) adminSaveUserSettings(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) adminUsers(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	sel := `SELECT u.id as id, u.user_email, u.created_at, u.updated_at, ur.role_text as role_text, (SELECT COUNT(*) FROM users_address WHERE user_id = u.id) AS address_count FROM users u LEFT JOIN user_roles ur ON u.id = ur.user_id`
-	if query := q.Get("query"); query != "" {
-		a.listQuery(w, r, sel+` where instr(u.user_email, ?) > 0`, `SELECT count(*) as count FROM users where instr(user_email, ?) > 0`,
-			[]any{query}, q.Get("limit"), q.Get("offset"), "")
+	limit, offset := atoi(q.Get("limit")), atoi(q.Get("offset"))
+	if q.Get("limit") == "" {
+		limit = 100
+	}
+	if limit <= 0 || limit > 100 || (q.Get("offset") != "" && offset < 0) {
+		text(w, 400, "Invalid pagination")
 		return
 	}
-	a.listQuery(w, r, sel, `SELECT count(*) as count FROM users`, nil, q.Get("limit"), q.Get("offset"), "")
+	where, params := "1 = 1", []any{}
+	if query := strings.TrimSpace(q.Get("query")); query != "" {
+		where = "instr(u.user_email, ?) > 0 OR instr(COALESCE(u.username, ''), ?) > 0"
+		params = []any{query, query}
+	}
+	rows, err := a.db.Query(r.Context(), `SELECT u.id, u.user_email, u.username, u.password_ciphertext, u.created_at, u.updated_at,
+		ur.role_text, (SELECT COUNT(*) FROM users_address WHERE user_id = u.id) AS address_count,
+		(SELECT COUNT(*) FROM raw_mails rm JOIN address aa ON aa.name = rm.address JOIN users_address uaa ON uaa.address_id = aa.id WHERE uaa.user_id = u.id) AS mail_count
+		FROM users u LEFT JOIN user_roles ur ON u.id = ur.user_id WHERE `+where+` ORDER BY u.id DESC LIMIT ? OFFSET ?`, append(params, limit, offset)...)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	for _, row := range rows {
+		role := row.Str("role_text")
+		ciphertext := row.Str("password_ciphertext")
+		delete(row, "password_ciphertext")
+		if role == a.cfg.AdminUserRole {
+			row["password"] = nil
+		} else if plain, err := a.decryptUserPassword(ciphertext); err == nil {
+			row["password"] = plain
+		} else {
+			row["password"] = nil
+		}
+	}
+	count, _ := a.db.Count(r.Context(), `SELECT count(*) FROM users u WHERE `+where, params...)
+	jsonResp(w, 200, map[string]any{"results": rows, "count": count})
+}
+
+func (a *App) adminGetUser(w http.ResponseWriter, r *http.Request) {
+	id := atoi(r.PathValue("user_id"))
+	row, _ := a.db.QueryOne(r.Context(), `SELECT u.id, u.user_email, u.username, u.password_ciphertext, u.created_at, u.updated_at, ur.role_text FROM users u LEFT JOIN user_roles ur ON ur.user_id = u.id WHERE u.id = ?`, id)
+	if row == nil {
+		text(w, 404, "User not found")
+		return
+	}
+	role := row.Str("role_text")
+	ciphertext := row.Str("password_ciphertext")
+	delete(row, "password_ciphertext")
+	if role == a.cfg.AdminUserRole {
+		row["password"] = nil
+	} else if plain, err := a.decryptUserPassword(ciphertext); err == nil {
+		row["password"] = plain
+	}
+	limits, _ := a.roles.UserLimits(r.Context(), id)
+	row["limits"] = limits
+	jsonResp(w, 200, row)
+}
+
+func (a *App) adminPatchUser(w http.ResponseWriter, r *http.Request) {
+	id := atoi(r.PathValue("user_id"))
+	var req struct {
+		Username      string            `json:"username"`
+		Password      string            `json:"password"`
+		PlainPassword string            `json:"password_plain"`
+		Limits        *roles.UserLimits `json:"limits"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		text(w, 400, "Invalid input")
+		return
+	}
+	if req.Username != "" {
+		if _, err := a.db.Exec(r.Context(), `UPDATE users SET username = ?, updated_at = datetime('now') WHERE id = ?`, strings.TrimSpace(req.Username), id); err != nil {
+			text(w, 400, "Username already exists")
+			return
+		}
+	}
+	if req.Password != "" {
+		plain := req.PlainPassword
+		if plain == "" {
+			plain = req.Password
+		}
+		ciphertext, _ := a.encryptUserPassword(plain)
+		if _, err := a.db.Exec(r.Context(), `UPDATE users SET password = ?, password_ciphertext = ?, updated_at = datetime('now') WHERE id = ?`, req.Password, ciphertext, id); err != nil {
+			text(w, 500, "Failed to update password")
+			return
+		}
+	}
+	if req.Limits != nil {
+		l := *req.Limits
+		if l.MaxAddressCount < -1 || l.MaxMailCount < -1 || l.MonthlyAddressQuota < -1 || l.MonthlyReceiveQuota < -1 {
+			text(w, 400, "Invalid limits")
+			return
+		}
+		if err := a.roles.SaveUserLimits(r.Context(), id, l); err != nil {
+			text(w, 500, "Failed to save limits")
+			return
+		}
+	}
+	ok(w)
 }
 
 func (a *App) adminCreateUser(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
+		Email         string            `json:"email"`
+		Username      string            `json:"username"`
+		Password      string            `json:"password"`
+		PlainPassword string            `json:"password_plain"`
+		Limits        *roles.UserLimits `json:"limits"`
 	}
 	readJSON(r, &req)
-	if req.Email == "" || req.Password == "" || len(req.Password) > 100 {
+	if req.Email == "" && req.Username == "" || req.Password == "" || len(req.Password) > 100 {
 		text(w, 400, "Invalid email or password")
 		return
 	}
+	if req.Email == "" {
+		req.Email = req.Username
+	}
+	if req.Username == "" {
+		req.Username = req.Email
+	}
 	info := userInfoJSON(r, clientIP(r, a.cfg.TrustedProxies), req.Email)
-	if _, err := a.db.Exec(r.Context(), `INSERT INTO users (user_email, password, user_info) VALUES (?, ?, ?)`, req.Email, req.Password, info); err != nil {
+	plain := req.PlainPassword
+	if plain == "" {
+		plain = req.Password
+	}
+	ciphertext, _ := a.encryptUserPassword(plain)
+	res, err := a.db.ExecContext(r.Context(), `INSERT INTO users (user_email, username, password, password_ciphertext, user_info) VALUES (?, ?, ?, ?, ?)`, req.Email, req.Username, req.Password, ciphertext, info)
+	if err != nil {
 		if strings.Contains(err.Error(), "UNIQUE") {
 			text(w, 400, "User already exists")
 			return
 		}
 		text(w, 500, "Failed to register: "+err.Error())
+		return
+	}
+	if req.Limits != nil {
+		id, _ := res.LastInsertId()
+		if err := a.roles.SaveUserLimits(r.Context(), id, *req.Limits); err != nil {
+			text(w, 500, "Failed to save limits")
+			return
+		}
+	} else {
+		id, _ := res.LastInsertId()
+		_ = a.assignDefaultRole(r.Context(), id)
+	}
+	ok(w)
+}
+
+func (a *App) adminGetUserLimits(w http.ResponseWriter, r *http.Request) {
+	l, ok := a.roles.UserLimits(r.Context(), atoi(r.PathValue("user_id")))
+	if !ok {
+		l = roles.UserLimits{MaxAddressCount: -1, MaxMailCount: -1, MonthlyAddressQuota: -1, MonthlyReceiveQuota: -1}
+	}
+	jsonResp(w, 200, l)
+}
+
+func (a *App) adminSaveUserLimits(w http.ResponseWriter, r *http.Request) {
+	var l roles.UserLimits
+	if err := readJSON(r, &l); err != nil || l.MaxAddressCount < -1 || l.MaxMailCount < -1 || l.MonthlyAddressQuota < -1 || l.MonthlyReceiveQuota < -1 {
+		text(w, 400, "Invalid limits")
+		return
+	}
+	if err := a.roles.SaveUserLimits(r.Context(), atoi(r.PathValue("user_id")), l); err != nil {
+		text(w, 500, "Failed to save limits")
 		return
 	}
 	ok(w)
@@ -511,22 +756,39 @@ func (a *App) adminCreateUser(w http.ResponseWriter, r *http.Request) {
 func (a *App) adminDeleteUser(w http.ResponseWriter, r *http.Request) {
 	id := atoi(r.PathValue("user_id"))
 	ctx := r.Context()
-	a.db.Exec(ctx, `DELETE FROM users WHERE id = ?`, id)
+	var username, email string
+	_ = a.db.QueryRowContext(ctx, `SELECT username, user_email FROM users WHERE id = ?`, id).Scan(&username, &email)
+	if username == "admin" || email == "admin" {
+		text(w, 400, "The admin account cannot be deleted")
+		return
+	}
+	// Remove dependent records as well; otherwise a reused SQLite user id could
+	// inherit stale monthly usage and quota data from a deleted account.
 	a.db.Exec(ctx, `DELETE FROM users_address WHERE user_id = ?`, id)
 	a.db.Exec(ctx, `DELETE FROM user_roles WHERE user_id = ?`, id)
+	a.db.Exec(ctx, `DELETE FROM user_limits WHERE user_id = ?`, id)
+	a.db.Exec(ctx, `DELETE FROM user_usage_monthly WHERE user_id = ?`, id)
+	a.db.Exec(ctx, `DELETE FROM user_passkeys WHERE user_id = ?`, id)
+	a.db.Exec(ctx, `DELETE FROM users WHERE id = ?`, id)
 	ok(w)
 }
 
 func (a *App) adminResetUserPassword(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Password string `json:"password"`
+		Password      string `json:"password"`
+		PlainPassword string `json:"password_plain"`
 	}
 	readJSON(r, &req)
 	if req.Password == "" || len(req.Password) > 100 {
 		text(w, 500, "Failed to update password: Invalid password")
 		return
 	}
-	if _, err := a.db.Exec(r.Context(), `UPDATE users SET password = ? WHERE id = ?`, req.Password, atoi(r.PathValue("user_id"))); err != nil {
+	plain := req.PlainPassword
+	if plain == "" {
+		plain = req.Password
+	}
+	ciphertext, _ := a.encryptUserPassword(plain)
+	if _, err := a.db.Exec(r.Context(), `UPDATE users SET password = ?, password_ciphertext = ?, updated_at = datetime('now') WHERE id = ?`, req.Password, ciphertext, atoi(r.PathValue("user_id"))); err != nil {
 		text(w, 500, "Failed to update password")
 		return
 	}
@@ -629,6 +891,22 @@ func (a *App) adminBindAddress(w http.ResponseWriter, r *http.Request) {
 	a.bindByID(w, r, req.UserID, req.AddressID, "")
 }
 
+func (a *App) adminUnbindAddress(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		UserID    int64 `json:"user_id"`
+		AddressID int64 `json:"address_id"`
+	}
+	if err := readJSON(r, &req); err != nil || req.UserID <= 0 || req.AddressID <= 0 {
+		text(w, 400, "Invalid user or address")
+		return
+	}
+	if _, err := a.db.Exec(r.Context(), `DELETE FROM users_address WHERE user_id = ? AND address_id = ?`, req.UserID, req.AddressID); err != nil {
+		text(w, 500, "Operation failed")
+		return
+	}
+	ok(w)
+}
+
 func (a *App) adminListRoles(w http.ResponseWriter, r *http.Request) {
 	list, err := a.roles.List(r.Context())
 	if err != nil {
@@ -707,14 +985,28 @@ func (a *App) adminGetMailWebhook(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) adminSaveMailWebhook(w http.ResponseWriter, r *http.Request) {
 	var s webhookSettings
-	readJSON(r, &s)
+	if err := readJSON(r, &s); err != nil {
+		text(w, 400, "Invalid input")
+		return
+	}
+	if err := validateWebhookSettings(s); err != nil {
+		text(w, 400, err.Error())
+		return
+	}
 	a.saveJSONSetting(r.Context(), "temp-mail-webhook-admin-mail-settings", s)
 	ok(w)
 }
 
 func (a *App) adminTestMailWebhook(w http.ResponseWriter, r *http.Request) {
 	var s webhookSettings
-	readJSON(r, &s)
+	if err := readJSON(r, &s); err != nil {
+		text(w, 400, "Invalid input")
+		return
+	}
+	if err := validateWebhookSettings(s); err != nil {
+		text(w, 400, err.Error())
+		return
+	}
 	row, _ := a.db.QueryOne(r.Context(), `SELECT * FROM raw_mails ORDER BY RANDOM() LIMIT 1`)
 	var id any = "0"
 	raw := "test raw email"
@@ -726,7 +1018,7 @@ func (a *App) adminTestMailWebhook(w http.ResponseWriter, r *http.Request) {
 	if vals["subject"] == "" {
 		vals["subject"] = "test subject"
 	}
-	if err := sendWebhook(s, vals); err != nil {
+	if _, err := sendWebhook(s, vals); err != nil {
 		text(w, 400, err.Error())
 		return
 	}
@@ -735,6 +1027,7 @@ func (a *App) adminTestMailWebhook(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) adminWorkerConfig(w http.ResponseWriter, r *http.Request) {
 	list, _ := a.roles.List(r.Context())
+	rc := a.effective(r.Context())
 	jsonResp(w, 200, map[string]any{
 		"DEFAULT_LANG": a.cfg.DefaultLang, "TITLE": a.cfg.Title,
 		"HAS_PASSWORD": len(a.cfg.Passwords), "HAS_ADMIN_PASSWORDS": len(a.cfg.AdminPasswords),
@@ -742,7 +1035,7 @@ func (a *App) adminWorkerConfig(w http.ResponseWriter, r *http.Request) {
 		"PREFIX": a.cfg.Prefix, "ADDRESS_CHECK_REGEX": a.cfg.AddressCheckRegex, "ADDRESS_REGEX": a.cfg.AddressRegex,
 		"MIN_ADDRESS_LEN": a.cfg.MinAddressLen, "MAX_ADDRESS_LEN": a.cfg.MaxAddressLen,
 		"FORWARD_ADDRESS_LIST": orEmpty(a.cfg.ForwardAddressList), "SUBDOMAIN_FORWARD_ADDRESS_LIST": nil,
-		"DEFAULT_DOMAINS": a.cfg.DefaultDomains, "DOMAINS": a.cfg.Domains,
+		"DEFAULT_DOMAINS": rc.DefaultDomains, "DOMAINS": rc.Domains,
 		"ENABLE_CREATE_ADDRESS_SUBDOMAIN_MATCH": a.cfg.EnableCreateAddressSubdomainMatch,
 		"RANDOM_SUBDOMAIN_DOMAINS":              a.cfg.RandomSubdomainDomains, "RANDOM_SUBDOMAIN_LENGTH": a.cfg.RandomSubdomainLength,
 		"DOMAIN_LABELS": orEmpty(a.cfg.DomainLabels), "HAS_JWT_SECRET": true,

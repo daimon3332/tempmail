@@ -17,9 +17,18 @@ func (a *App) userRoutes() {
 	m := a.mux
 	m.HandleFunc("GET /user_api/open_settings", a.userOpenSettings)
 	m.HandleFunc("GET /user_api/settings", a.userSettings)
+	m.HandleFunc("GET /user_api/dashboard", a.userDashboard)
+	m.HandleFunc("GET /user_api/usage", a.userUsage)
+	m.HandleFunc("GET /user_api/profile", a.userProfile)
+	m.HandleFunc("PATCH /user_api/profile", a.userUpdateProfile)
 	m.HandleFunc("GET /user_api/mails", a.userMails)
+	m.HandleFunc("GET /user_api/workspace_mails", a.workspaceMails)
+	m.HandleFunc("GET /user_api/workspace_mail/{id}", a.workspaceParsedMail)
+	m.HandleFunc("PATCH /user_api/workspace_mail/{id}/read", a.workspaceMarkRead)
+	m.HandleFunc("DELETE /user_api/workspace_mail/{id}", a.workspaceDeleteMail)
 	m.HandleFunc("DELETE /user_api/mails/{id}", a.userDeleteMail)
 	m.HandleFunc("GET /user_api/address/{address_id}/settings", a.userSendSettings)
+	m.HandleFunc("DELETE /user_api/address/{address_id}", a.userDeleteAddress)
 	m.HandleFunc("POST /user_api/address/{address_id}/request_send_mail_access", a.userRequestSendAccess)
 	m.HandleFunc("POST /user_api/address/{address_id}/send_mail", a.userSendMail)
 	m.HandleFunc("GET /user_api/sendbox", a.userSendbox)
@@ -191,6 +200,7 @@ func (a *App) userSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	role, _ := a.roles.UserRole(ctx, userID)
+	limits, hasLimits := a.roles.UserLimits(ctx, userID)
 	var roleName string
 	var rolePayload any
 	if role != nil {
@@ -198,6 +208,11 @@ func (a *App) userSettings(w http.ResponseWriter, r *http.Request) {
 		rolePayload = map[string]any{"role": role.Role, "domains": role.Domains, "prefix": role.Prefix,
 			"max_address_count": role.MaxAddressCount, "monthly_address_quota": role.MonthlyAddressQuota,
 			"can_custom_name": role.CanCustomName, "can_send_mail": role.CanSendMail, "name": role.Name}
+		if hasLimits {
+			rolePayload = map[string]any{"role": role.Role, "domains": role.Domains, "prefix": role.Prefix,
+				"max_address_count": limits.MaxAddressCount, "monthly_address_quota": limits.MonthlyAddressQuota,
+				"can_custom_name": role.CanCustomName, "can_send_mail": limits.CanSendMail, "name": role.Name}
+		}
 	}
 	isAdmin := a.cfg.AdminUserRole != "" && a.cfg.AdminUserRole == roleName
 	var accessToken any
@@ -217,6 +232,9 @@ func (a *App) userSettings(w http.ResponseWriter, r *http.Request) {
 	out["access_token"] = accessToken
 	out["new_user_token"] = newToken
 	out["user_role"] = rolePayload
+	if hasLimits {
+		out["limits"] = limits
+	}
 	jsonResp(w, 200, out)
 }
 
@@ -233,8 +251,82 @@ func (a *App) userMails(w http.ResponseWriter, r *http.Request) {
 	a.listQuery(w, r, `SELECT rm.*`+from, `SELECT count(*) as count`+from, params, q.Get("limit"), q.Get("offset"), "rm.id desc")
 }
 
+func (a *App) userDashboard(w http.ResponseWriter, r *http.Request) {
+	u := userOf(r)
+	uid := claimInt(u, "user_id")
+	rows, err := a.db.Query(r.Context(), `SELECT a.id, a.name, a.created_at, a.updated_at,
+		(SELECT COUNT(*) FROM raw_mails WHERE address = a.name) AS mail_count,
+		(SELECT COUNT(*) FROM raw_mails WHERE address = a.name AND COALESCE(is_unread,0)=1) AS unread_count,
+		(SELECT MAX(created_at) FROM raw_mails WHERE address = a.name) AS last_mail_at
+		FROM address a JOIN users_address ua ON ua.address_id = a.id WHERE ua.user_id = ? ORDER BY last_mail_at DESC, a.id DESC`, uid)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	jsonResp(w, 200, map[string]any{"results": rows, "count": len(rows)})
+}
+
+func (a *App) userUsage(w http.ResponseWriter, r *http.Request) {
+	u := userOf(r)
+	uid := claimInt(u, "user_id")
+	limits, _ := a.roles.UserLimits(r.Context(), uid)
+	addresses, _ := a.db.Count(r.Context(), `SELECT COUNT(*) FROM users_address WHERE user_id = ?`, uid)
+	mails, _ := a.db.Count(r.Context(), `SELECT COUNT(*) FROM raw_mails rm JOIN address a ON a.name = rm.address JOIN users_address ua ON ua.address_id = a.id WHERE ua.user_id = ?`, uid)
+	month := time.Now().UTC().Format("2006-01")
+	usage := map[string]int64{"addresses_created": 0, "mails_received": 0}
+	if row, _ := a.db.QueryOne(r.Context(), `SELECT addresses_created, mails_received FROM user_usage_monthly WHERE user_id = ? AND month = ?`, uid, month); row != nil {
+		usage["addresses_created"], usage["mails_received"] = row.Int("addresses_created"), row.Int("mails_received")
+	}
+	jsonResp(w, 200, map[string]any{"limits": limits, "used": map[string]any{"address_count": addresses, "mail_count": mails, "month": month, "monthly": usage}})
+}
+
+func (a *App) userProfile(w http.ResponseWriter, r *http.Request) {
+	u := userOf(r)
+	uid := claimInt(u, "user_id")
+	row, _ := a.db.QueryOne(r.Context(), `SELECT id, user_email, username, created_at, updated_at FROM users WHERE id = ?`, uid)
+	if row == nil {
+		text(w, 404, "User not found")
+		return
+	}
+	limits, _ := a.roles.UserLimits(r.Context(), uid)
+	role, _ := a.roles.UserRole(r.Context(), uid)
+	jsonResp(w, 200, map[string]any{"id": row.Int("id"), "email": row.Str("user_email"), "username": row.Str("username"), "created_at": row.Str("created_at"), "updated_at": row.Str("updated_at"), "role": role, "limits": limits})
+}
+
+func (a *App) userUpdateProfile(w http.ResponseWriter, r *http.Request) {
+	u := userOf(r)
+	uid := claimInt(u, "user_id")
+	var req struct {
+		Username      string `json:"username"`
+		Password      string `json:"password"`
+		PlainPassword string `json:"password_plain"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		text(w, 400, "Invalid input")
+		return
+	}
+	if req.Username != "" {
+		if _, err := a.db.Exec(r.Context(), `UPDATE users SET username = ?, updated_at = datetime('now') WHERE id = ?`, strings.TrimSpace(req.Username), uid); err != nil {
+			text(w, 400, "Username already exists")
+			return
+		}
+	}
+	if req.Password != "" {
+		plain := req.PlainPassword
+		if plain == "" {
+			plain = req.Password
+		}
+		ciphertext, _ := a.encryptUserPassword(plain)
+		if _, err := a.db.Exec(r.Context(), `UPDATE users SET password = ?, password_ciphertext = ?, updated_at = datetime('now') WHERE id = ?`, req.Password, ciphertext, uid); err != nil {
+			text(w, 500, "Failed to update password")
+			return
+		}
+	}
+	ok(w)
+}
+
 func (a *App) userDeleteMail(w http.ResponseWriter, r *http.Request) {
-	if !a.cfg.EnableUserDeleteEmail {
+	if !a.effective(r.Context()).EnableUserDeleteEmail {
 		text(w, 403, "User delete email is disabled")
 		return
 	}
@@ -258,6 +350,30 @@ func (a *App) userSendSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	st := a.sendBalanceState(r, addr, false, true)
 	jsonResp(w, 200, map[string]any{"address": addr, "send_balance": st.balance})
+}
+
+func (a *App) userDeleteAddress(w http.ResponseWriter, r *http.Request) {
+	if !a.effective(r.Context()).EnableUserDeleteEmail {
+		text(w, 403, "User delete email is disabled")
+		return
+	}
+	u := userOf(r)
+	uid, aid := claimInt(u, "user_id"), atoi(r.PathValue("address_id"))
+	if aid <= 0 {
+		text(w, 400, "Address not found")
+		return
+	}
+	var exists int64
+	_ = a.db.QueryRowContext(r.Context(), `SELECT address_id FROM users_address WHERE user_id = ? AND address_id = ?`, uid, aid).Scan(&exists)
+	if exists == 0 {
+		text(w, 404, "Address not found")
+		return
+	}
+	if err := a.deleteAddressesWhere(r.Context(), `id = ?`, aid); err != nil {
+		fail(w, err)
+		return
+	}
+	ok(w)
 }
 
 func (a *App) userRequestSendAccess(w http.ResponseWriter, r *http.Request) {
@@ -304,7 +420,7 @@ func (a *App) userSendbox(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) userDeleteSendbox(w http.ResponseWriter, r *http.Request) {
-	if !a.cfg.EnableUserDeleteEmail {
+	if !a.effective(r.Context()).EnableUserDeleteEmail {
 		text(w, 403, "User delete email is disabled")
 		return
 	}
@@ -408,10 +524,11 @@ func (a *App) userRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Email    string `json:"email"`
-		Password string `json:"password"`
-		Code     string `json:"code"`
-		CfToken  string `json:"cf_token"`
+		Email         string `json:"email"`
+		Password      string `json:"password"`
+		PlainPassword string `json:"password_plain"`
+		Code          string `json:"code"`
+		CfToken       string `json:"cf_token"`
 	}
 	readJSON(r, &req)
 	if a.cfg.GlobalTurnstile() {
@@ -441,8 +558,13 @@ func (a *App) userRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	info := userInfoJSON(r, clientIP(r, a.cfg.TrustedProxies), req.Email)
+	plain := req.PlainPassword
+	if plain == "" {
+		plain = req.Password
+	}
+	ciphertext, _ := a.encryptUserPassword(plain)
 	if !us.EnableMailVerify {
-		if _, err := a.db.Exec(ctx, `INSERT INTO users (user_email, password, user_info) VALUES (?, ?, ?)`, req.Email, req.Password, info); err != nil {
+		if _, err := a.db.Exec(ctx, `INSERT INTO users (user_email, password, password_ciphertext, user_info) VALUES (?, ?, ?, ?)`, req.Email, req.Password, ciphertext, info); err != nil {
 			if strings.Contains(err.Error(), "UNIQUE") {
 				text(w, 400, "User already exists")
 				return
@@ -455,9 +577,9 @@ func (a *App) userRegister(w http.ResponseWriter, r *http.Request) {
 		ok(w)
 		return
 	}
-	if _, err := a.db.Exec(ctx, `INSERT INTO users (user_email, password, user_info) VALUES (?, ?, ?)
-		ON CONFLICT(user_email) DO UPDATE SET password = excluded.password, user_info = excluded.user_info, updated_at = datetime('now')`,
-		req.Email, req.Password, info); err != nil {
+	if _, err := a.db.Exec(ctx, `INSERT INTO users (user_email, password, password_ciphertext, user_info) VALUES (?, ?, ?, ?)
+		ON CONFLICT(user_email) DO UPDATE SET password = excluded.password, password_ciphertext = excluded.password_ciphertext, user_info = excluded.user_info, updated_at = datetime('now')`,
+		req.Email, req.Password, ciphertext, info); err != nil {
 		text(w, 400, "Failed to register")
 		return
 	}
@@ -473,6 +595,7 @@ func (a *App) userRegister(w http.ResponseWriter, r *http.Request) {
 func (a *App) userLogin(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Email    string `json:"email"`
+		Username string `json:"username"`
 		Password string `json:"password"`
 		CfToken  string `json:"cf_token"`
 	}
@@ -483,11 +606,15 @@ func (a *App) userLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if req.Email == "" || req.Password == "" {
+	identifier := strings.TrimSpace(req.Username)
+	if identifier == "" {
+		identifier = strings.TrimSpace(req.Email)
+	}
+	if identifier == "" || req.Password == "" {
 		text(w, 400, "Invalid email or password")
 		return
 	}
-	row, _ := a.db.QueryOne(r.Context(), `SELECT id, password FROM users where user_email = ?`, req.Email)
+	row, _ := a.db.QueryOne(r.Context(), `SELECT id, user_email, password FROM users WHERE user_email = ? OR username = ?`, identifier, identifier)
 	if row == nil || row.Str("password") == "" {
 		text(w, 400, "User not found")
 		return
@@ -496,8 +623,17 @@ func (a *App) userLogin(w http.ResponseWriter, r *http.Request) {
 		text(w, 400, "Invalid email or password")
 		return
 	}
-	token, _ := a.jwt.UserToken(req.Email, row.Int("id"))
-	jsonResp(w, 200, map[string]string{"jwt": token})
+	userID := row.Int("id")
+	token, _ := a.jwt.UserToken(row.Str("user_email"), userID)
+	role, _ := a.roles.UserRole(r.Context(), userID)
+	resp := map[string]any{"jwt": token}
+	if role != nil {
+		access, _ := a.jwt.AccessToken(row.Str("user_email"), userID, role.Role)
+		resp["access_token"] = access
+		resp["user_role"] = role.Role
+		resp["is_admin"] = role.Role == a.cfg.AdminUserRole
+	}
+	jsonResp(w, 200, resp)
 }
 
 func (a *App) userBindedAddresses(w http.ResponseWriter, r *http.Request) {

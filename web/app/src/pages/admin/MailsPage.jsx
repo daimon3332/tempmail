@@ -41,7 +41,7 @@ function MailList({ unknow, t }) {
   const del = (id) => api(`/admin/mails/${id}`, 'DELETE')
   return (
     <div className="space-y-3">
-      <PagedTable path={path} queryKey={unknow ? 'unknown_mails' : 'admin_mails'} pageSize={20} filters={filters}
+      <PagedTable path={path} queryKey={unknow ? 'unknown_mails' : 'admin_mails'} filters={filters}
         columns={[
           { key: 'id', title: 'ID' },
           { key: 'address', title: '地址', render: r => <span className="break-all text-xs">{r.address}</span> },
@@ -66,7 +66,7 @@ function RawMail({ m, onClose }) {
 function Sendbox({ t }) {
   const del = (id) => api(`/admin/sendbox/${id}`, 'DELETE')
   return (
-    <PagedTable path="/admin/sendbox" queryKey="admin_sendbox" pageSize={20}
+    <PagedTable path="/admin/sendbox" queryKey="admin_sendbox"
       filters={({ setExtra, extra }) => <Input className="max-w-xs" placeholder="按地址过滤" value={extra.address || ''} onChange={e => setExtra(x => ({ ...x, address: e.target.value }))} />}
       columns={[
         { key: 'id', title: 'ID' },

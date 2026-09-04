@@ -287,7 +287,7 @@ func (a *App) extDomains(w http.ResponseWriter, r *http.Request) {
 	out := make([]map[string]any, 0, len(a.cfg.Domains))
 	for _, d := range a.cfg.Domains {
 		out = append(out, map[string]any{"name": d, "enabled": true, "default": contains(a.cfg.DefaultDomains, d),
-			"random_subdomain": a.allowRandomSubdomain(d)})
+			"random_subdomain": a.allowRandomSubdomain(r.Context(), d)})
 	}
 	jsonResp(w, 200, map[string]any{"domains": out})
 }

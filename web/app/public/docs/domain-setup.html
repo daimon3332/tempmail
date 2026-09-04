@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>域名配置教程 - Tempmail</title><style>body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;line-height:1.7;max-width:860px;margin:0 auto;padding:32px 20px;color:#17202a}h1{font-size:28px}h2{margin-top:28px;font-size:20px}code{background:#f1f3f5;padding:2px 5px;border-radius:4px}li{margin:8px 0}.note{padding:12px 16px;background:#eef6ff;border-left:3px solid #2878d4;border-radius:4px}</style></head>
+<body><h1>Tempmail 域名配置</h1><p>本教程说明如何把自有域名添加到 Tempmail，并让邮箱可以接收邮件。</p>
+<h2>1. 在系统设置中添加</h2><ol><li>进入“系统设置 → 域名与新建邮箱”。</li><li>输入完整域名，例如 <code>mail.example.com</code>，点击“添加域名”。</li><li>勾选“默认”可作为未指定后缀时的默认域名；勾选“允许随机子域”后才能创建随机子域邮箱。</li><li>保存设置。HTTP 创建接口会立即读取新配置，SMTP 接收需要重启服务。</li></ol>
+<h2>2. 配置 DNS</h2><p>在域名 DNS 服务商处添加 MX 记录，将邮件投递到运行 Tempmail 的服务器。优先级通常设置为较低数值，例如：</p><ul><li>主机记录：<code>mail.example.com</code>（或你的收件子域）</li><li>记录类型：<code>MX</code></li><li>邮件服务器：指向服务器主机名，例如 <code>mx.example.com</code></li><li>同时为邮件服务器主机名配置 A/AAAA 记录</li></ul><p class="note">如果使用 Cloudflare Email Routing，请按 Cloudflare 控制台要求配置转发，并确保 Worker 的目标地址和 <code>INGEST_TOKEN</code> 正确。</p>
+<h2>3. 配置发信认证</h2><p>建议配置 SPF、DKIM 和 DMARC。它们能提高投递成功率，也会影响系统的垃圾邮件检查规则。</p>
+<h2>4. 重启并验证</h2><ol><li>重启 Tempmail 容器，使 SMTP 监听器加载新域名。</li><li>访问 <code>/open_api/domains</code>，确认域名出现在列表中。</li><li>创建一个测试邮箱，向该地址发送测试邮件。</li><li>在“邮箱与邮件”页面确认邮件进入收件箱。</li></ol>
+<h2>常见问题</h2><p><strong>可以创建但收不到邮件：</strong>通常是 MX 未生效、服务器 25 端口未放行，或服务重启前仍使用旧域名列表。</p><p><strong>随机子域创建失败：</strong>请先在域名列表勾选“允许随机子域”，并确认 DNS 通配符和 MX 策略覆盖该子域。</p>
+</body></html>

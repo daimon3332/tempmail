@@ -12,7 +12,9 @@ func (a *App) routes() {
 	m.HandleFunc("GET /health_check", a.healthCheck)
 	m.HandleFunc("GET /events", a.sseHandler)
 	m.HandleFunc("GET /docs/api", a.apiDocs)
+	m.HandleFunc("GET /api/openapi.json", a.openapi)
 	m.HandleFunc("GET /open_api/settings", a.openSettings)
+	m.HandleFunc("GET /open_api/domains", a.openDomains)
 	m.HandleFunc("POST /open_api/site_login", a.siteLogin)
 	m.HandleFunc("POST /open_api/admin_login", a.adminLogin)
 	m.HandleFunc("POST /open_api/credential_login", a.credentialLogin)
@@ -20,11 +22,16 @@ func (a *App) routes() {
 	// address-scoped api
 	m.HandleFunc("GET /api/mails", a.apiListMails)
 	m.HandleFunc("GET /api/mail/{id}", a.apiGetMail)
+	// Both spellings are used by upstream clients; keep the plural form in
+	// addition to the historical singular route.
+	m.HandleFunc("GET /api/mails/{id}", a.apiGetMail)
 	m.HandleFunc("DELETE /api/mails/{id}", a.apiDeleteMail)
 	m.HandleFunc("POST /api/mails/{id}/read", a.apiMarkRead)
+	m.HandleFunc("PATCH /api/mails/{id}/read", a.apiMarkRead)
 	m.HandleFunc("GET /api/parsed_mails", a.apiListParsedMails)
 	m.HandleFunc("GET /api/parsed_mail/{id}", a.apiGetParsedMail)
 	m.HandleFunc("GET /api/settings", a.apiSettings)
+	m.HandleFunc("GET /api/address", a.apiAddressInfo)
 	m.HandleFunc("POST /api/new_address", a.apiNewAddress)
 	m.HandleFunc("DELETE /api/delete_address", a.apiDeleteAddress)
 	m.HandleFunc("DELETE /api/clear_inbox", a.apiClearInbox)
@@ -72,8 +79,8 @@ func (a *App) openSettings(w http.ResponseWriter, r *http.Request) {
 		"addressRegex":                    rc.AddressRegex,
 		"minAddressLen":                   rc.MinAddressLen,
 		"maxAddressLen":                   rc.MaxAddressLen,
-		"defaultDomains":                  a.cfg.DefaultDomains,
-		"domains":                         a.cfg.Domains,
+		"defaultDomains":                  rc.DefaultDomains,
+		"domains":                         rc.Domains,
 		"randomSubdomainDomains":          rc.RandomSubdomainDomains,
 		"domainLabels":                    orEmpty(a.cfg.DomainLabels),
 		"needAuth":                        needAuth,
@@ -103,6 +110,11 @@ func (a *App) openSettings(w http.ResponseWriter, r *http.Request) {
 		"statusUrl":                  "",
 		"enableGlobalTurnstileCheck": a.cfg.GlobalTurnstile(),
 	})
+}
+
+func (a *App) openDomains(w http.ResponseWriter, r *http.Request) {
+	rc := a.effective(r.Context())
+	jsonResp(w, 200, map[string]any{"domains": orEmpty(rc.Domains), "default_domains": orEmpty(rc.DefaultDomains), "prefix": rc.Prefix, "min_address_len": rc.MinAddressLen, "max_address_len": rc.MaxAddressLen})
 }
 
 func orEmpty(s []string) []string {
@@ -189,6 +201,22 @@ func (a *App) apiListMails(w http.ResponseWriter, r *http.Request) {
 		params, q.Get("limit"), q.Get("offset"), "")
 }
 
+func (a *App) apiAddressInfo(w http.ResponseWriter, r *http.Request) {
+	address, id := addressOf(r)
+	if address == "" {
+		text(w, 401, "Invalid address credential")
+		return
+	}
+	row, _ := a.db.QueryOne(r.Context(), `SELECT id, name, created_at, updated_at FROM address WHERE id = ? AND name = ?`, id, address)
+	if row == nil {
+		text(w, 404, "Address not found")
+		return
+	}
+	mailCount, _ := a.db.Count(r.Context(), `SELECT COUNT(*) FROM raw_mails WHERE address = ?`, address)
+	unread, _ := a.db.Count(r.Context(), `SELECT COUNT(*) FROM raw_mails WHERE address = ? AND COALESCE(is_unread,0)=1`, address)
+	jsonResp(w, 200, map[string]any{"id": row.Int("id"), "address": row.Str("name"), "created_at": row.Str("created_at"), "updated_at": row.Str("updated_at"), "mail_count": mailCount, "unread_count": unread})
+}
+
 // incrementalFilter appends optional after_id / after (RFC3339) constraints.
 func incrementalFilter(r *http.Request, where string, params []any) (string, []any) {
 	q := r.URL.Query()
@@ -221,7 +249,7 @@ func (a *App) apiGetMail(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) apiDeleteMail(w http.ResponseWriter, r *http.Request) {
-	if !a.cfg.EnableUserDeleteEmail {
+	if !a.effective(r.Context()).EnableUserDeleteEmail {
 		text(w, 403, "User delete email is disabled")
 		return
 	}
@@ -231,7 +259,7 @@ func (a *App) apiDeleteMail(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) apiMarkRead(w http.ResponseWriter, r *http.Request) {
-	if !a.cfg.EnableMailReadStatus {
+	if !a.effective(r.Context()).EnableMailReadStatus {
 		jsonResp(w, 403, map[string]string{"error": "Mail read status is disabled"})
 		return
 	}
@@ -303,10 +331,7 @@ func (a *App) apiListParsedMails(w http.ResponseWriter, r *http.Request) {
 	for _, row := range rows {
 		out = append(out, a.parsedRow(row))
 	}
-	var count int64
-	if offset == 0 {
-		count, _ = a.db.Count(r.Context(), `SELECT count(*) FROM raw_mails where address = ?`, address)
-	}
+	count, _ := a.db.Count(r.Context(), `SELECT count(*) FROM raw_mails where address = ?`, address)
 	jsonResp(w, 200, map[string]any{"results": out, "count": count})
 }
 
@@ -345,8 +370,8 @@ func (a *App) apiNewAddress(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	rc := a.effective(ctx)
 	user := userOf(r)
-	if rc.DisableAnonymousUserCreateEmail && user == nil {
-		text(w, 403, "Anonymous user create email is disabled")
+	if user == nil && !a.isAPIKeyValid(r) {
+		text(w, 401, "A valid API key or user login is required")
 		return
 	}
 	if !rc.EnableUserCreateEmail {
@@ -372,11 +397,9 @@ func (a *App) apiNewAddress(w http.ResponseWriter, r *http.Request) {
 				req.Name = ""
 			}
 		}
-		if rc.DisableAnonymousUserCreateEmail || roleName != "" {
-			if reached, msg := a.roles.LimitReached(ctx, claimInt(user, "user_id"), roleName); reached {
-				text(w, 400, msg)
-				return
-			}
+		if reached, msg := a.roles.LimitReached(ctx, claimInt(user, "user_id"), roleName); reached {
+			text(w, 400, msg)
+			return
 		}
 	}
 	if req.Name == "" || rc.DisableCustomAddressName {
@@ -393,8 +416,12 @@ func (a *App) apiNewAddress(w http.ResponseWriter, r *http.Request) {
 		text(w, 400, "Failed to create address: "+err.Error())
 		return
 	}
-	if user != nil && rc.DisableAnonymousUserCreateEmail {
-		a.db.Exec(ctx, `INSERT OR IGNORE INTO users_address (user_id, address_id) VALUES (?, ?)`, claimInt(user, "user_id"), res.AddressID)
+	if user != nil {
+		uid := claimInt(user, "user_id")
+		if n, _ := a.db.Exec(ctx, `INSERT OR IGNORE INTO users_address (user_id, address_id) VALUES (?, ?)`, uid, res.AddressID); n > 0 {
+			month := time.Now().UTC().Format("2006-01")
+			a.db.Exec(ctx, `INSERT INTO user_usage_monthly (user_id, month, addresses_created) VALUES (?, ?, 1) ON CONFLICT(user_id, month) DO UPDATE SET addresses_created = addresses_created + 1`, uid, month)
+		}
 	}
 	jsonResp(w, 200, res)
 }
@@ -410,7 +437,7 @@ func truthy(v any) bool {
 }
 
 func (a *App) apiDeleteAddress(w http.ResponseWriter, r *http.Request) {
-	if !a.cfg.EnableUserDeleteEmail {
+	if !a.effective(r.Context()).EnableUserDeleteEmail {
 		text(w, 403, "User delete email is disabled")
 		return
 	}
@@ -431,7 +458,7 @@ func (a *App) apiDeleteAddress(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) apiClearInbox(w http.ResponseWriter, r *http.Request) {
-	if !a.cfg.EnableUserDeleteEmail {
+	if !a.effective(r.Context()).EnableUserDeleteEmail {
 		text(w, 403, "User delete email is disabled")
 		return
 	}
@@ -444,7 +471,7 @@ func (a *App) apiClearInbox(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) apiClearSentItems(w http.ResponseWriter, r *http.Request) {
-	if !a.cfg.EnableUserDeleteEmail {
+	if !a.effective(r.Context()).EnableUserDeleteEmail {
 		text(w, 403, "User delete email is disabled")
 		return
 	}
@@ -457,7 +484,7 @@ func (a *App) apiClearSentItems(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) apiChangePassword(w http.ResponseWriter, r *http.Request) {
-	if !a.cfg.EnableAddressPassword {
+	if !a.effective(r.Context()).EnableAddressPassword {
 		text(w, 403, "Password change is disabled")
 		return
 	}
@@ -482,7 +509,7 @@ func (a *App) apiChangePassword(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) apiAddressLogin(w http.ResponseWriter, r *http.Request) {
-	if !a.cfg.EnableAddressPassword {
+	if !a.effective(r.Context()).EnableAddressPassword {
 		text(w, 403, "Password login is disabled")
 		return
 	}
@@ -513,7 +540,7 @@ func (a *App) apiAddressLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) apiGetAutoReply(w http.ResponseWriter, r *http.Request) {
-	if !a.cfg.EnableAutoReply {
+	if !a.effective(r.Context()).EnableAutoReply {
 		text(w, 403, "Auto reply is disabled")
 		return
 	}
@@ -534,7 +561,7 @@ func (a *App) apiGetAutoReply(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) apiSaveAutoReply(w http.ResponseWriter, r *http.Request) {
-	if !a.cfg.EnableAutoReply {
+	if !a.effective(r.Context()).EnableAutoReply {
 		text(w, 403, "Auto reply is disabled")
 		return
 	}
@@ -588,7 +615,7 @@ func (a *App) webhookAllowed(r *http.Request, address string) bool {
 }
 
 func (a *App) apiGetWebhook(w http.ResponseWriter, r *http.Request) {
-	if !a.cfg.EnableWebhook {
+	if !a.effective(r.Context()).EnableWebhook {
 		text(w, 403, "Webhook is not enabled")
 		return
 	}
@@ -603,7 +630,7 @@ func (a *App) apiGetWebhook(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) apiSaveWebhook(w http.ResponseWriter, r *http.Request) {
-	if !a.cfg.EnableWebhook {
+	if !a.effective(r.Context()).EnableWebhook {
 		text(w, 403, "Webhook is not enabled")
 		return
 	}
@@ -613,7 +640,14 @@ func (a *App) apiSaveWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var s webhookSettings
-	readJSON(r, &s)
+	if err := readJSON(r, &s); err != nil {
+		text(w, 400, "Invalid input")
+		return
+	}
+	if err := validateWebhookSettings(s); err != nil {
+		text(w, 400, err.Error())
+		return
+	}
 	if err := a.saveJSONSetting(r.Context(), "temp-mail-webhook-user-settings:"+address, s); err != nil {
 		fail(w, err)
 		return
@@ -622,13 +656,20 @@ func (a *App) apiSaveWebhook(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) apiTestWebhook(w http.ResponseWriter, r *http.Request) {
-	if !a.cfg.EnableWebhook {
+	if !a.effective(r.Context()).EnableWebhook {
 		text(w, 403, "Webhook is not enabled")
 		return
 	}
 	address, _ := addressOf(r)
 	var s webhookSettings
-	readJSON(r, &s)
+	if err := readJSON(r, &s); err != nil {
+		text(w, 400, "Invalid input")
+		return
+	}
+	if err := validateWebhookSettings(s); err != nil {
+		text(w, 400, err.Error())
+		return
+	}
 	row, _ := a.db.QueryOne(r.Context(), `SELECT * FROM raw_mails WHERE address = ? ORDER BY RANDOM() LIMIT 1`, address)
 	var id any = "0"
 	raw := "test raw email"
@@ -640,7 +681,7 @@ func (a *App) apiTestWebhook(w http.ResponseWriter, r *http.Request) {
 	if vals["subject"] == "" {
 		vals["subject"] = "test subject"
 	}
-	if err := sendWebhook(s, vals); err != nil {
+	if _, err := sendWebhook(s, vals); err != nil {
 		text(w, 400, err.Error())
 		return
 	}

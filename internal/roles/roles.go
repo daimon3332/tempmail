@@ -24,6 +24,14 @@ type Role struct {
 	Source              string   `json:"source"` // env | db
 }
 
+type UserLimits struct {
+	MaxAddressCount     int  `json:"max_address_count"`
+	MaxMailCount        int  `json:"max_mail_count"`
+	MonthlyAddressQuota int  `json:"monthly_address_quota"`
+	MonthlyReceiveQuota int  `json:"monthly_receive_quota"`
+	CanSendMail         bool `json:"can_send_mail"`
+}
+
 type Store struct {
 	cfg *config.Config
 	db  *db.DB
@@ -179,13 +187,22 @@ func (s *Store) LimitReached(ctx context.Context, userID int64, roleName string)
 	settings := s.UserSettings(ctx)
 	max := settings.MaxAddressCount
 	monthly := -1
+	limits, hasLimits := s.UserLimits(ctx, userID)
+	if hasLimits {
+		if limits.MaxAddressCount != -1 {
+			max = limits.MaxAddressCount
+		}
+		monthly = limits.MonthlyAddressQuota
+	}
 	if roleName != "" {
 		role, _ := s.Get(ctx, roleName)
 		if role != nil {
-			if role.MaxAddressCount != 0 {
+			if !hasLimits && role.MaxAddressCount != 0 {
 				max = role.MaxAddressCount
 			}
-			monthly = role.MonthlyAddressQuota
+			if !hasLimits {
+				monthly = role.MonthlyAddressQuota
+			}
 		} else if cfg := s.roleAddressConfig(ctx)[roleName]; cfg != nil && cfg.MaxAddressCount != nil && *cfg.MaxAddressCount >= 0 {
 			max = *cfg.MaxAddressCount
 		}
@@ -204,6 +221,31 @@ func (s *Store) LimitReached(ctx context.Context, userID int64, roleName string)
 		}
 	}
 	return false, ""
+}
+
+func (s *Store) UserLimits(ctx context.Context, userID int64) (UserLimits, bool) {
+	row, err := s.db.QueryOne(ctx, `SELECT max_address_count, max_mail_count, monthly_address_quota, monthly_receive_quota, can_send_mail FROM user_limits WHERE user_id = ?`, userID)
+	if err != nil || row == nil {
+		return UserLimits{}, false
+	}
+	return UserLimits{
+		MaxAddressCount: int(row.Int("max_address_count")), MaxMailCount: int(row.Int("max_mail_count")),
+		MonthlyAddressQuota: int(row.Int("monthly_address_quota")), MonthlyReceiveQuota: int(row.Int("monthly_receive_quota")),
+		CanSendMail: row.Int("can_send_mail") == 1,
+	}, true
+}
+
+func (s *Store) SaveUserLimits(ctx context.Context, userID int64, l UserLimits) error {
+	canSend := 0
+	if l.CanSendMail {
+		canSend = 1
+	}
+	_, err := s.db.Exec(ctx, `INSERT INTO user_limits (user_id, max_address_count, max_mail_count, monthly_address_quota, monthly_receive_quota, can_send_mail)
+VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT(user_id) DO UPDATE SET max_address_count=excluded.max_address_count, max_mail_count=excluded.max_mail_count,
+monthly_address_quota=excluded.monthly_address_quota, monthly_receive_quota=excluded.monthly_receive_quota,
+can_send_mail=excluded.can_send_mail, updated_at=datetime('now')`, userID, l.MaxAddressCount, l.MaxMailCount, l.MonthlyAddressQuota, l.MonthlyReceiveQuota, canSend)
+	return err
 }
 
 type roleAddressConfig struct {

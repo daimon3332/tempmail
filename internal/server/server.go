@@ -51,10 +51,23 @@ const (
 	ctxUserRole
 )
 
-var apiPrefixes = []string{"/api/", "/open_api/", "/user_api/", "/admin/", "/telegram/", "/external/"}
+var apiPrefixes = []string{"/api/", "/open_api/", "/user_api/", "/admin/", "/telegram/", "/external/", "/events"}
+
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusWriter) WriteHeader(status int) {
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
 
 func New(ctx context.Context, cfg *config.Config, d *db.DB, signer *auth.Signer, m *mailer.Mailer, rs *roles.Store, webFS fs.FS) *App {
 	a := &App{cfg: cfg, db: d, jwt: signer, mailer: m, roles: rs, mux: http.NewServeMux()}
+	if err := ensureSystemAccounts(ctx, cfg, d); err != nil {
+		log.Printf("system account setup: %v", err)
+	}
 	if webFS != nil {
 		a.static = spaHandler(webFS)
 	}
@@ -147,6 +160,10 @@ func (a *App) Handler() http.Handler {
 
 func (a *App) auth(w http.ResponseWriter, r *http.Request) {
 	p := r.URL.Path
+	if p == "/api/openapi.json" {
+		a.mux.ServeHTTP(w, r.WithContext(r.Context()))
+		return
+	}
 	if code, block := a.ipBlacklistApply(r); block {
 		w.Header().Set("Retry-After", "60")
 		text(w, code, "Access blocked")
@@ -159,7 +176,8 @@ func (a *App) auth(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if len(a.sitePasswords(r.Context())) > 0 && !strings.HasPrefix(p, "/open_api") && !strings.HasPrefix(p, "/telegram/") {
+	apiKeyOK := a.isAPIKeyValid(r)
+	if len(a.sitePasswords(r.Context())) > 0 && !apiKeyOK && p != "/events" && !strings.HasPrefix(p, "/open_api") && !strings.HasPrefix(p, "/telegram/") {
 		if !contains(a.sitePasswords(r.Context()), r.Header.Get("x-custom-auth")) {
 			text(w, 401, "Need Custom Auth Password")
 			return
@@ -168,6 +186,21 @@ func (a *App) auth(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	switch {
 	case strings.HasPrefix(p, "/api/"):
+		if apiKeyOK {
+			if p != "/api/new_address" && p != "/api/address_login" {
+				address := strings.TrimSpace(r.Header.Get("x-address"))
+				if address == "" {
+					address = strings.TrimSpace(r.URL.Query().Get("address"))
+				}
+				id, found, err := a.db.ScanInt(ctx, `SELECT id FROM address WHERE name = ?`, address)
+				if err != nil || !found {
+					text(w, 400, "x-address is required for this API key request")
+					return
+				}
+				ctx = context.WithValue(ctx, ctxAddress, jwt.MapClaims{"address": address, "address_id": id})
+			}
+			break
+		}
 		if strings.HasPrefix(p, "/api/new_address") {
 			ctx = a.withUserPayload(ctx, r)
 			break
@@ -212,6 +245,12 @@ func (a *App) auth(w http.ResponseWriter, r *http.Request) {
 			text(w, 401, "Need admin password")
 			return
 		}
+		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		a.mux.ServeHTTP(sw, r.WithContext(ctx))
+		if r.Method != http.MethodGet && r.Method != http.MethodHead && r.URL.Path != "/admin/operation_log" {
+			a.auditRequest(r, sw.status)
+		}
+		return
 	}
 	a.mux.ServeHTTP(w, r.WithContext(ctx))
 }

@@ -1,8 +1,8 @@
-import { useState } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { PagedTable, Input, Select } from '../../components/Table'
 import { Button, Card, Badge, Modal } from '../../components/ui'
-import api, { setAdmin } from '../../lib/api'
+import api, { download } from '../../lib/api'
 import { fmtTime } from '../../lib/utils'
 
 export default function AddressPage({ t }) {
@@ -22,9 +22,9 @@ export default function AddressPage({ t }) {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="text-xl font-semibold">{t('adminAddress')}</h2>
         <div className="flex gap-2">
-          <Button size="sm" variant="outline" onClick={() => window.location.assign('/admin/address/export')}>导出 CSV</Button>
-          <Button size="sm" onClick={() => setShowCreate(true)}>+ {t('newAddress')}</Button>
-          {sel.size > 0 && <Button size="sm" variant="destructive" onClick={() => { if (confirm(`删除 ${sel.size} 个地址？`)) bulkDel.mutate(sel) }}>删除选中 ({sel.size})</Button>}
+          <Button size="sm" variant="outline" onClick={() => download('/admin/address/export', 'addresses.csv').catch(e => alert(e.message))}>导出 CSV</Button>
+          <Button size="sm" onClick={() => setShowCreate(true)}>+ 新建邮箱</Button>
+          {sel.size > 0 && <Button size="sm" variant="destructive" onClick={() => { if (confirm(`删除 ${sel.size} 个邮箱？`)) bulkDel.mutate(sel) }}>删除选中 ({sel.size})</Button>}
         </div>
       </div>
       <PagedTable
@@ -33,7 +33,7 @@ export default function AddressPage({ t }) {
         t={t}
         filters={({ setExtra, extra }) => (
           <>
-            <Input className="max-w-xs" placeholder="搜索地址" value={extra.query || ''} onChange={e => setExtra(x => ({ ...x, query: e.target.value }))} />
+            <Input className="max-w-xs" placeholder="搜索邮箱" value={extra.query || ''} onChange={e => setExtra(x => ({ ...x, query: e.target.value }))} />
             <Select value={extra.sort_by || 'id'} onChange={e => setExtra(x => ({ ...x, sort_by: e.target.value }))}>
               <option value="id">ID 排序</option><option value="created_at">时间</option><option value="mail_count">邮件数</option>
             </Select>
@@ -41,7 +41,7 @@ export default function AddressPage({ t }) {
         )}
         columns={[
           { key: 'id', title: 'ID' },
-          { key: 'name', title: t('address'), render: r => <span className="font-medium">{r.name}</span> },
+          { key: 'name', title: '邮箱', render: r => <span className="font-medium">{r.name}</span> },
           { key: 'created_at', title: t('created_at'), render: r => fmtTime(r.created_at) },
           { key: 'source_meta', title: '来源' },
           { key: 'mail_count', title: t('mailCount'), render: r => <Badge variant="green">{r.mail_count}</Badge> },
@@ -58,24 +58,28 @@ export default function AddressPage({ t }) {
           },
         ]}
       />
-      {showCreate && <CreateAddress onClose={() => { setShowCreate(false); refresh() }} />}
+      {showCreate && <CreateAddress t={t} onClose={() => { setShowCreate(false); refresh() }} />}
       {showPwd && <ShowPwd addr={showPwd} onClose={() => setShowPwd(null)} />}
       {showMails && <ViewMails addr={showMails} onClose={() => setShowMails(null)} />}
     </div>
   )
 }
 
-function CreateAddress({ onClose }) {
+function CreateAddress({ onClose, t }) {
   const [form, setForm] = useState({ name: '', domain: '', enablePrefix: false, enableRandomSubdomain: false })
   const [res, setRes] = useState(null)
   const [err, setErr] = useState('')
+  const domainsQ = useQuery({ queryKey: ['open-domains'], queryFn: () => api('/open_api/domains').then(r => r.data) })
+  const domains = domainsQ.data?.domains || []
+  useEffect(() => { if (!form.domain && domains[0]) setForm(x => ({ ...x, domain: domains[0] })) }, [domains, form.domain])
   const doCreate = async () => {
+    if (!form.domain || !domains.includes(form.domain)) { setErr('请选择有效域名'); return }
     const r = await api('/admin/new_address', 'POST', form)
     if (r.status === 200 || r.status === 201) setRes(r.data)
     else setErr(r.data || '失败')
   }
   return (
-    <Modal title="创建地址" onClose={onClose}>
+    <Modal title="新建邮箱" onClose={onClose}>
       {res ? (
         <div className="space-y-3">
           <div className="rounded-lg border border-border p-3 text-sm">
@@ -87,8 +91,7 @@ function CreateAddress({ onClose }) {
         </div>
       ) : (
         <div className="space-y-3">
-          <div className="flex gap-2"><Input placeholder="用户名" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /><span className="self-center text-muted-foreground">@</span></div>
-          <Input placeholder="域名" value={form.domain} onChange={e => setForm({ ...form, domain: e.target.value })} />
+          <div className="flex gap-2"><Input placeholder="邮箱前缀" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /><span className="self-center text-muted-foreground">@</span><Select className="min-w-[12rem]" value={form.domain} onChange={e => setForm({ ...form, domain: e.target.value })} disabled={domainsQ.isLoading || !domains.length}><option value="">选择域名</option>{domains.map(d => <option key={d} value={d}>{d}</option>)}</Select></div>
           <div className="flex gap-4 text-sm"><label><input type="checkbox" checked={form.enablePrefix} onChange={e => setForm({ ...form, enablePrefix: e.target.checked })} /> 自动加前缀</label><label><input type="checkbox" checked={form.enableRandomSubdomain} onChange={e => setForm({ ...form, enableRandomSubdomain: e.target.checked })} /> 随机子域</label></div>
           {err && <p className="text-xs text-destructive">{err}</p>}
           <Button className="w-full" onClick={doCreate}>{t('create')}</Button>
@@ -100,10 +103,9 @@ function CreateAddress({ onClose }) {
 
 function ShowPwd({ addr, onClose }) {
   const [token, setToken] = useState('')
-  const load = async () => { const r = await api(`/admin/show_password/${addr.id}`); setToken(r.data?.jwt || '') }
-  load()
+  useEffect(() => { api(`/admin/show_password/${addr.id}`).then(r => setToken(r.data?.jwt || '')) }, [addr.id])
   return (
-    <Modal title={`地址凭据 · ${addr.name}`} onClose={onClose}>
+    <Modal title={`邮箱凭据 · ${addr.name}`} onClose={onClose}>
       <div className="space-y-3">
         <div className="break-all rounded-lg border border-border p-3 text-xs">{token || '加载中...'}</div>
         <Button className="w-full" onClick={() => { navigator.clipboard.writeText(token); alert('已复制') }}>复制 JWT</Button>
@@ -115,8 +117,7 @@ function ShowPwd({ addr, onClose }) {
 function ViewMails({ addr, onClose }) {
   const [mails, setMails] = useState(null)
   const [cur, setCur] = useState(null)
-  const load = async () => { const r = await api(`/admin/mails?address=${encodeURIComponent(addr.name)}&limit=20&offset=0`); setMails(r.data) }
-  if (mails === null) load()
+  useEffect(() => { api(`/admin/mails?address=${encodeURIComponent(addr.name)}&limit=20&offset=0`).then(r => setMails(r.data)) }, [addr.name])
   return (
     <Modal title={`邮件 · ${addr.name}`} onClose={onClose}>
       {cur ? (

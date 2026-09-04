@@ -33,12 +33,12 @@ export default function RolesPage({ t }) {
           </div>
         </Card>
       ))}
-      {show && <CreateRole onClose={() => { setShow(false); refresh() }} />}
+      {show && <CreateRole t={t} onClose={() => { setShow(false); refresh() }} />}
     </div>
   )
 }
 
-function CreateRole({ onClose }) {
+function CreateRole({ onClose, t }) {
   const [f, setF] = useState({ role: '', name: '', max_address_count: -1, monthly_address_quota: -1, can_custom_name: true, can_send_mail: true, domains: [] })
   const [err, setErr] = useState('')
   const save = async () => {

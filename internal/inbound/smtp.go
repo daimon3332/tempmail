@@ -22,6 +22,8 @@ import (
 // import cycle.
 type Hooks interface {
 	OnMailStored(ctx context.Context, address string, mailID int64, raw string, parsed *mailparse.Mail)
+	MailFeatureEnabled(ctx context.Context, name string) bool
+	MailJunkCheckList(ctx context.Context) []string
 }
 
 type Server struct {
@@ -31,6 +33,8 @@ type Server struct {
 	hooks  Hooks
 	srv    *gosmtp.Server
 }
+
+var ErrQuotaExceeded = errors.New("mail quota exceeded")
 
 func New(cfg *config.Config, d *db.DB, m *mailer.Mailer, hooks Hooks) *Server {
 	s := &Server{cfg: cfg, db: d, mailer: m, hooks: hooks}
@@ -125,6 +129,9 @@ func (x *session) Data(r io.Reader) error {
 	}
 	for _, to := range x.rcpts {
 		if _, err := x.s.store(ctx, x.from, to, messageID, raw, parsed); err != nil {
+			if errors.Is(err, ErrQuotaExceeded) {
+				continue
+			}
 			log.Printf("smtp: store %s -> %s: %v", x.from, to, err)
 			return &gosmtp.SMTPError{Code: 451, EnhancedCode: gosmtp.EnhancedCode{4, 3, 0}, Message: "Failed to save message"}
 		}
@@ -136,7 +143,7 @@ func (x *session) Reset()        { x.from, x.rcpts = "", nil }
 func (x *session) Logout() error { return nil }
 
 func (s *Server) blockUnknown() bool {
-	if s.cfg.BlockUnknownAddress {
+	if s.featureEnabled(context.Background(), "block_unknown_address", s.cfg.BlockUnknownAddress) {
 		return true
 	}
 	var rule struct {
@@ -164,10 +171,15 @@ func (s *Server) isBlocked(ctx context.Context, from string) bool {
 // isJunk mirrors upstream junk_mail_policy: reject when Authentication-Results
 // reports a failure for any configured check (default spf/dkim/dmarc).
 func (s *Server) isJunk(m *mailparse.Mail) bool {
-	if !s.cfg.EnableCheckJunkMail || m == nil {
+	if !s.featureEnabled(context.Background(), "check_junk_mail", s.cfg.EnableCheckJunkMail) || m == nil {
 		return false
 	}
 	checks := s.cfg.JunkMailCheckList
+	if s.hooks != nil {
+		if configured := s.hooks.MailJunkCheckList(context.Background()); configured != nil {
+			checks = configured
+		}
+	}
 	if len(checks) == 0 {
 		checks = []string{"spf", "dkim", "dmarc"}
 	}
@@ -190,6 +202,11 @@ func (s *Server) isJunk(m *mailparse.Mail) bool {
 func (s *Server) Ingest(ctx context.Context, from, to string, raw []byte) (int64, error) {
 	to = normalizeAddress(to)
 	from = strings.ToLower(strings.TrimSpace(from))
+	if s.blockUnknown() {
+		if _, found, _ := s.db.ScanInt(ctx, `SELECT id FROM address WHERE name = ?`, to); !found {
+			return 0, errors.New("unknown address")
+		}
+	}
 	if s.isBlocked(ctx, from) {
 		return 0, errors.New("sender blocked")
 	}
@@ -201,16 +218,39 @@ func (s *Server) Ingest(ctx context.Context, from, to string, raw []byte) (int64
 	if parsed != nil {
 		messageID = parsed.MessageID
 	}
-	return s.store(ctx, from, to, messageID, raw, parsed)
+	id, err := s.store(ctx, from, to, messageID, raw, parsed)
+	if errors.Is(err, ErrQuotaExceeded) {
+		return 0, nil
+	}
+	return id, err
 }
 
 func (s *Server) store(ctx context.Context, from, to, messageID string, raw []byte, parsed *mailparse.Mail) (int64, error) {
+	var userID int64
+	if err := s.db.QueryRowContext(ctx, `SELECT ua.user_id FROM users_address ua JOIN address a ON a.id = ua.address_id WHERE a.name = ?`, to).Scan(&userID); err == nil {
+		if limits, _ := s.db.QueryOne(ctx, `SELECT max_mail_count, monthly_receive_quota FROM user_limits WHERE user_id = ?`, userID); limits != nil {
+			maxMail, monthly := limits.Int("max_mail_count"), limits.Int("monthly_receive_quota")
+			if maxMail >= 0 {
+				if n, _ := s.db.Count(ctx, `SELECT COUNT(*) FROM raw_mails rm JOIN address a ON a.name = rm.address JOIN users_address ua ON ua.address_id = a.id WHERE ua.user_id = ?`, userID); n >= maxMail {
+					s.db.Exec(ctx, `INSERT INTO quota_audit (user_id, address, kind, detail) VALUES (?, ?, 'mail_count', 'maximum mail count reached')`, userID, to)
+					return 0, ErrQuotaExceeded
+				}
+			}
+			if monthly >= 0 {
+				month := time.Now().UTC().Format("2006-01")
+				if n, _ := s.db.Count(ctx, `SELECT mails_received FROM user_usage_monthly WHERE user_id = ? AND month = ?`, userID, month); n >= monthly {
+					s.db.Exec(ctx, `INSERT INTO quota_audit (user_id, address, kind, detail) VALUES (?, ?, 'monthly_receive', 'monthly receive quota reached')`, userID, to)
+					return 0, ErrQuotaExceeded
+				}
+			}
+		}
+	}
 	var mid any
 	if messageID != "" {
 		mid = messageID
 	}
 	var unread any
-	if s.cfg.EnableMailReadStatus {
+	if s.featureEnabled(ctx, "mail_read_status", s.cfg.EnableMailReadStatus) {
 		unread = 1
 	}
 	res, err := s.db.ExecContext(ctx, `INSERT INTO raw_mails (source, address, raw, message_id, is_unread) VALUES (?, ?, ?, ?, ?)`,
@@ -219,6 +259,10 @@ func (s *Server) store(ctx context.Context, from, to, messageID string, raw []by
 		return 0, err
 	}
 	id, _ := res.LastInsertId()
+	if userID > 0 {
+		month := time.Now().UTC().Format("2006-01")
+		s.db.Exec(ctx, `INSERT INTO user_usage_monthly (user_id, month, mails_received) VALUES (?, ?, 1) ON CONFLICT(user_id, month) DO UPDATE SET mails_received = mails_received + 1`, userID, month)
+	}
 	log.Printf("mail: stored %d from=%s to=%s", id, from, to)
 	go func() {
 		s.forward(from, to, raw)
@@ -291,7 +335,7 @@ func (s *Server) forward(from, to string, raw []byte) {
 }
 
 func (s *Server) autoReply(ctx context.Context, from, to, messageID string) {
-	if !s.cfg.EnableAutoReply || messageID == "" || from == "" {
+	if !s.featureEnabled(ctx, "auto_reply", s.cfg.EnableAutoReply) || messageID == "" || from == "" {
 		return
 	}
 	row, err := s.db.QueryOne(ctx, `SELECT * FROM auto_reply_mails where address = ? and enabled = 1`, to)
@@ -324,4 +368,11 @@ func (s *Server) autoReply(ctx context.Context, from, to, messageID string) {
 	if err := s.mailer.Send(to, from, raw); err != nil {
 		log.Printf("smtp: auto reply to %s failed: %v", from, err)
 	}
+}
+
+func (s *Server) featureEnabled(ctx context.Context, name string, fallback bool) bool {
+	if s.hooks == nil {
+		return fallback
+	}
+	return s.hooks.MailFeatureEnabled(ctx, name)
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -38,7 +37,6 @@ func (a *App) adminDBBackup(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", "attachment; filename=tempmail-"+time.Now().UTC().Format("20060102")+".db")
 	w.Header().Set("Content-Type", "application/octet-stream")
 	io.Copy(w, f)
-	a.audit(r.Context(), "db_backup", "database backup downloaded")
 }
 
 func (a *App) adminDBImport(w http.ResponseWriter, r *http.Request) {
@@ -58,7 +56,6 @@ func (a *App) adminDBImport(w http.ResponseWriter, r *http.Request) {
 		text(w, 400, "import failed: "+err.Error())
 		return
 	}
-	a.audit(r.Context(), "db_import", fmt.Sprintf("imported %d statements (merge=%v)", st.Executed, merge))
 	jsonResp(w, 200, map[string]any{"success": true, "executed": st.Executed, "skipped": st.Skipped})
 }
 
@@ -94,7 +91,6 @@ func (a *App) adminSendMailUsageReset(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	a.db.Exec(ctx, `DELETE FROM settings WHERE key = ?`, dailyKey())
 	a.db.Exec(ctx, `DELETE FROM settings WHERE key = ?`, monthlyKey())
-	a.audit(ctx, "send_mail_usage", "reset daily/monthly counters")
 	ok(w)
 }
 
@@ -151,7 +147,6 @@ func (a *App) adminAddressImport(w http.ResponseWriter, r *http.Request) {
 		}
 		created++
 	}
-	a.audit(r.Context(), "address_import", fmt.Sprintf("imported %d addresses (%d skipped)", created, skipped))
 	jsonResp(w, 200, map[string]any{"created": created, "skipped": skipped})
 }
 
@@ -171,7 +166,6 @@ func (a *App) adminSendTestMail(w http.ResponseWriter, r *http.Request) {
 		text(w, 500, "send failed: "+err.Error())
 		return
 	}
-	a.audit(r.Context(), "test_mail", req.To)
 	jsonResp(w, 200, map[string]string{"status": "ok"})
 }
 

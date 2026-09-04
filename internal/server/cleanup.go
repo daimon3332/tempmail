@@ -42,6 +42,46 @@ type cleanupSettings struct {
 	CustomSqlCleanupList             []customSQLCleanup `json:"customSqlCleanupList"`
 }
 
+func defaultCleanupSettings() cleanupSettings {
+	return cleanupSettings{
+		CleanMailsDays: 30, CleanUnknowMailsDays: 30, CleanSendBoxDays: 30,
+		CleanAddressDays: 30, CleanInactiveAddressDays: 30, CleanUnboundAddressDays: 30,
+		EnableEmptyAddressAutoCleanup: true, CleanEmptyAddressDays: 30,
+	}
+}
+
+func normalizeCleanupSettings(s *cleanupSettings) {
+	if s.CleanMailsDays < 1 {
+		s.CleanMailsDays = 30
+	}
+	if s.CleanUnknowMailsDays < 1 {
+		s.CleanUnknowMailsDays = 30
+	}
+	if s.CleanSendBoxDays < 1 {
+		s.CleanSendBoxDays = 30
+	}
+	if s.CleanAddressDays < 1 {
+		s.CleanAddressDays = 30
+	}
+	if s.CleanInactiveAddressDays < 1 {
+		s.CleanInactiveAddressDays = 30
+	}
+	if s.CleanUnboundAddressDays < 1 {
+		s.CleanUnboundAddressDays = 30
+	}
+	if s.CleanEmptyAddressDays < 1 {
+		s.CleanEmptyAddressDays = 30
+	}
+}
+
+func (a *App) loadCleanupSettings(ctx context.Context) cleanupSettings {
+	s := defaultCleanupSettings()
+	if a.jsonSetting(ctx, "auto_cleanup", &s) {
+		normalizeCleanupSettings(&s)
+	}
+	return s
+}
+
 func validateCustomSQL(s string) error {
 	s = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(s), ";"))
 	switch {
@@ -60,6 +100,13 @@ func validateCustomSQL(s string) error {
 }
 
 func (a *App) deleteAddressesWhere(ctx context.Context, cond string, args ...any) error {
+	// Removing a user-owned mailbox refunds the current month's creation slot.
+	if owners, err := a.db.Query(ctx, `SELECT ua.user_id FROM users_address ua WHERE ua.address_id IN (SELECT id FROM address WHERE `+cond+`)`, args...); err == nil {
+		month := time.Now().UTC().Format("2006-01")
+		for _, owner := range owners {
+			_, _ = a.db.Exec(ctx, `UPDATE user_usage_monthly SET addresses_created = CASE WHEN addresses_created > 0 THEN addresses_created - 1 ELSE 0 END WHERE user_id = ? AND month = ?`, owner.Int("user_id"), month)
+		}
+	}
 	// Resolve the affected addresses first so Telegram bindings can be cleaned.
 	if rows, err := a.db.Query(ctx, `SELECT name FROM address WHERE `+cond, args...); err == nil {
 		for _, r := range rows {
@@ -109,16 +156,51 @@ func (a *App) cleanup(ctx context.Context, cleanType string, days int) error {
 	case "sendbox":
 		_, err := a.db.Exec(ctx, `DELETE FROM sendbox WHERE id IN (SELECT id FROM sendbox WHERE created_at < datetime('now', ?) ORDER BY created_at, id LIMIT ?)`, mod, batch)
 		return err
+	case "custom":
+		var s cleanupSettings
+		if !a.jsonSetting(ctx, "auto_cleanup", &s) {
+			return errors.New("Invalid custom cleanup config")
+		}
+		for _, c := range s.CustomSqlCleanupList {
+			if !c.Enabled {
+				continue
+			}
+			if err := validateCustomSQL(c.SQL); err != nil {
+				return err
+			}
+			if _, err := a.db.Exec(ctx, strings.TrimSuffix(strings.TrimSpace(c.SQL), ";")); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	return errors.New("Invalid clean type")
 }
 
+func (a *App) cleanupTypes(ctx context.Context, cleanTypes []string, days int) error {
+	if len(cleanTypes) == 0 {
+		return errors.New("Invalid cleanup config")
+	}
+	seen := map[string]bool{}
+	for _, cleanType := range cleanTypes {
+		cleanType = strings.TrimSpace(cleanType)
+		if cleanType == "" || seen[cleanType] {
+			continue
+		}
+		seen[cleanType] = true
+		if err := a.cleanup(ctx, cleanType, days); err != nil {
+			return err
+		}
+	}
+	if len(seen) == 0 {
+		return errors.New("Invalid cleanup config")
+	}
+	return nil
+}
+
 // RunScheduledCleanup mirrors upstream scheduled.ts and is invoked hourly.
 func (a *App) RunScheduledCleanup(ctx context.Context) {
-	var s cleanupSettings
-	if !a.jsonSetting(ctx, "auto_cleanup", &s) {
-		return
-	}
+	s := a.loadCleanupSettings(ctx)
 	run := func(enabled bool, t string, d int) {
 		if enabled {
 			if err := a.cleanup(ctx, t, d); err != nil {

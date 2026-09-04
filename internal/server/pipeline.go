@@ -106,14 +106,15 @@ func (a *App) aiExtract(ctx context.Context, m *mailparse.Mail) *ExtractResult {
 	if len(content) > 12000 {
 		content = content[:12000]
 	}
-	if a.cfg.AIExtractEndpoint != "" && a.cfg.AIExtractAPIKey != "" {
+	rc := a.effective(ctx)
+	if rc.AIEnabled && rc.AIEndpoint != "" && rc.AIAPIKey != "" {
 		body, _ := json.Marshal(map[string]any{
-			"model": a.cfg.AIExtractModel, "temperature": 0,
+			"model": rc.AIModel, "temperature": 0,
 			"response_format": map[string]string{"type": "json_object"},
 			"messages":        []map[string]string{{"role": "system", "content": aiPrompt}, {"role": "user", "content": content}},
 		})
-		req, _ := http.NewRequestWithContext(ctx, "POST", strings.TrimSuffix(a.cfg.AIExtractEndpoint, "/")+"/chat/completions", bytes.NewReader(body))
-		req.Header.Set("Authorization", "Bearer "+a.cfg.AIExtractAPIKey)
+		req, _ := http.NewRequestWithContext(ctx, "POST", strings.TrimSuffix(rc.AIEndpoint, "/")+"/chat/completions", bytes.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+rc.AIAPIKey)
 		req.Header.Set("Content-Type", "application/json")
 		resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
 		if err == nil {

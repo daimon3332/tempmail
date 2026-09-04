@@ -3,11 +3,11 @@
 # on first run, start via docker compose.
 set -euo pipefail
 
-SERVER="${SERVER:-root@root@example.com}"
+SERVER="${SERVER:?set SERVER to the deployment host, e.g. root@example.com}"
 PORT="${PORT:-22}"
 KEY="${KEY:-$HOME/.ssh/id_general}"
 DIR="${DIR:-/opt/tempmail}"
-SSH="ssh -i $KEY -p $PORT -o ConnectTimeout=20 $SERVER"
+SSH="ssh -i $KEY -p $PORT -o ConnectTimeout=20 -o KexAlgorithms=diffie-hellman-group14-sha256 $SERVER"
 
 cd "$(dirname "$0")"
 [ -f .env ] || { echo ".env missing (copy .env.example)"; exit 1; }
@@ -21,8 +21,8 @@ tar --exclude=.git --exclude=data --exclude=reference \
 echo "== sync D1 dumps (only if not present)"
 $SSH "mkdir -p $DIR/backups/d1"
 for f in backups/d1/cf-mail.sql backups/d1/cf-teml-mail-2.sql; do
-  if ! $SSH "test -f $DIR/$f"; then
-    scp -i "$KEY" -P "$PORT" "$f" "$SERVER:$DIR/$f"
+  if [ -f "$f" ] && ! $SSH "test -f $DIR/$f"; then
+    scp -i "$KEY" -P "$PORT" -o KexAlgorithms=diffie-hellman-group14-sha256 "$f" "$SERVER:$DIR/$f"
   fi
 done
 

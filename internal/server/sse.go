@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
+
+	"tempmail/internal/auth"
 )
 
 // subscription is a single SSE client channel.
@@ -37,6 +40,12 @@ func broadcast(address string, event map[string]any) {
 }
 
 func (a *App) sseHandler(w http.ResponseWriter, r *http.Request) {
+	address := strings.TrimSpace(r.URL.Query().Get("address"))
+	claims, err := a.jwt.Verify(r.URL.Query().Get("token"))
+	if err != nil || address == "" || auth.ClaimStr(claims, "address") != address {
+		text(w, http.StatusUnauthorized, "Invalid address credential")
+		return
+	}
 	fl, ok := w.(http.Flusher)
 	if !ok {
 		text(w, 500, "streaming unsupported")
@@ -46,18 +55,6 @@ func (a *App) sseHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-
-	address := r.URL.Query().Get("address")
-	// Global feed requires admin auth; per-address feed requires address JWT.
-	if address == "" {
-		if !a.isAdmin(r) {
-			// Anonymous global stream is allowed (used by the frontend to
-			// receive a generic "new mail" ping); events carry no data.
-			address = "public"
-		} else {
-			address = ""
-		}
-	}
 
 	subsMu.Lock()
 	subID++

@@ -1,89 +1,41 @@
-import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { Button, Card, Input } from '../../components/ui'
+import { useEffect, useMemo, useState } from 'react'
+import { KeyRound, Globe2, Mail, Bot, Plug, SlidersHorizontal, Reply, ShieldCheck } from 'lucide-react'
+import { Button, Card, Input, Select, Textarea } from '../../components/ui'
 import api from '../../lib/api'
 
-// Config page: hot-reloadable settings (runtime_config). Saving applies immediately.
+const SECTIONS = [
+  ['site', '站点与外观', SlidersHorizontal], ['auth', '认证与 API Key', KeyRound],
+  ['domains', '域名与新建邮箱', Globe2], ['mail', '邮件规则', Mail],
+  ['reply', '自动回复', Reply], ['webhook', 'Webhook', Plug], ['ai', 'AI 提取', Bot],
+  ['environment', '环境变量与高级配置', ShieldCheck],
+]
+
 export default function ConfigPage({ t }) {
-  const q = useQuery({ queryKey: ['runtime_config'], queryFn: () => api('/admin/runtime_config').then(r => r.data) })
-  const [f, setF] = useState(null)
-  const [saved, setSaved] = useState(false)
-  if (q.data && f === null) setF(q.data)
-  const up = (k, v) => setF(x => ({ ...x, [k]: v }))
-  const state = f || q.data || {}
-  const save = async () => {
-    const r = await api('/admin/runtime_config', 'POST', state)
-    if (r.status === 200) { setSaved(true); q.refetch(); setTimeout(() => setSaved(false), 2000) }
-    else alert(r.data || '保存失败')
-  }
-  return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold">配置</h2>
-        <div className="flex items-center gap-2">
-          {saved && <span className="text-sm text-emerald-500">✓ 已保存并即时生效</span>}
-          <Button size="sm" onClick={save}>{t('save')}</Button>
-        </div>
-      </div>
-
-      <Section title="站点信息">
-        <Field label="标题" value={state.title} onChange={v => up('title', v)} />
-        <Field label="公告" value={state.announcement} onChange={v => up('announcement', v)} />
-        <Field label="版权" value={state.copyright} onChange={v => up('copyright', v)} />
-        <Field label="联系邮箱" value={state.admin_contact} onChange={v => up('admin_contact', v)} />
-        <Field label="默认语言" value={state.default_lang} onChange={v => up('default_lang', v)} />
-      </Section>
-
-      <Section title="认证与 API Key">
-        <Field label="站点访问密码（启用 x-custom-auth）" type="password" value={state.site_password} onChange={v => up('site_password', v)} placeholder="留空不启用" />
-        <Field label="管理员密码（启用 x-admin-auth 覆盖）" type="password" value={state.admin_password} onChange={v => up('admin_password', v)} placeholder="留空用 .env" />
-        <Field label="API Key（第三方调用 /api/*）" value={state.api_key} onChange={v => up('api_key', v)} placeholder="留空关闭" />
-      </Section>
-
-      <Section title="地址创建">
-        <Field label="前缀" value={state.prefix} onChange={v => up('prefix', v)} />
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="最小长度" type="number" value={state.min_address_len} onChange={v => up('min_address_len', parseInt(v) || 1)} />
-          <Field label="最大长度" type="number" value={state.max_address_len} onChange={v => up('max_address_len', parseInt(v) || 30)} />
-        </div>
-        <Field label="允许创建邮箱" type="checkbox" value={state.enable_user_create_email} onChange={v => up('enable_user_create_email', !!v)} />
-        <Field label="禁止匿名创建" type="checkbox" value={state.disable_anonymous_user_create_email} onChange={v => up('disable_anonymous_user_create_email', !!v)} />
-        <Field label="禁止自定义邮箱名" type="checkbox" value={state.disable_custom_address_name} onChange={v => up('disable_custom_address_name', !!v)} />
-      </Section>
-
-      <Section title="功能开关">
-        <ToggleRow label="允许删除邮件" value={state.enable_user_delete_email} onChange={v => up('enable_user_delete_email', !!v)} />
-        <ToggleRow label="已读状态" value={state.enable_mail_read_status} onChange={v => up('enable_mail_read_status', !!v)} />
-        <ToggleRow label="地址密码登录" value={state.enable_address_password} onChange={v => up('enable_address_password', !!v)} />
-        <ToggleRow label="Webhook" value={state.enable_webhook} onChange={v => up('enable_webhook', !!v)} />
-        <ToggleRow label="自动回复" value={state.enable_auto_reply} onChange={v => up('enable_auto_reply', !!v)} />
-        <ToggleRow label="垃圾邮件检查" value={state.enable_check_junk_mail} onChange={v => up('enable_check_junk_mail', !!v)} />
-        <ToggleRow label="拒绝未知地址" value={state.block_unknown_address} onChange={v => up('block_unknown_address', !!v)} />
-      </Section>
-
-      <Section title="AI 提取（验证码/链接自动提取）">
-        <ToggleRow label="启用 AI 提取" value={state.ai_enabled} onChange={v => up('ai_enabled', !!v)} />
-        <Field label="AI 接口地址（OpenAI 兼容 /v1/chat/completions）" value={state.ai_endpoint} onChange={v => up('ai_endpoint', v)} placeholder="https://api.openai.com/v1" />
-        <Field label="AI API Key" type="password" value={state.ai_api_key} onChange={v => up('ai_api_key', v)} />
-        <Field label="模型" value={state.ai_model} onChange={v => up('ai_model', v)} placeholder="gpt-4o-mini" />
-        <ToggleRow label="仅提取白名单地址" value={state.ai_enable_allow_list} onChange={v => up('ai_enable_allow_list', !!v)} />
-        <Field label="白名单地址（逗号分隔）" value={(state.ai_allow_list || []).join(',')} onChange={v => up('ai_allow_list', v.split(',').map(s => s.trim()).filter(Boolean))} />
-      </Section>
-
-      <p className="text-xs text-muted-foreground">提示：域名列表、SMTP 中继、S3 等需改 .env 并重启容器生效。其余保存即生效。</p>
+  const q = apiQuery(); const [section, setSection] = useState('site'); const [form, setForm] = useState(null); const [saved, setSaved] = useState(''); const [saving, setSaving] = useState(false)
+  useEffect(() => { if (q.data && !form) setForm(q.data) }, [q.data, form])
+  const state = form || q.data || {}; const up = (key, value) => setForm(prev => ({ ...(prev || state), [key]: value }))
+  const save = async () => { setSaving(true); const r = await api('/admin/runtime_config', 'POST', { ...state, enable_address_password: false, disable_anonymous_user_create_email: false }); setSaving(false); if (r.status === 200) { setSaved(r.data?.env_sync === 'synced' ? '已保存并同步 .env' : '已保存，部分配置需重启'); q.refetch(); window.setTimeout(() => setSaved(''), 3000) } else alert(r.data || '保存失败') }
+  return <div className="space-y-4">
+    <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="text-xl font-semibold">系统设置</h2><p className="mt-1 text-sm text-muted-foreground">运行时配置会立即用于新请求；SMTP、监听地址和外部服务修改后需要重启容器。</p></div><div className="flex items-center gap-2">{saved && <span className="text-sm text-emerald-600">{saved}</span>}<Button size="sm" disabled={saving} onClick={save}>{saving ? '保存中…' : t('save')}</Button></div></div>
+    <div className="grid gap-4 lg:grid-cols-[200px_minmax(0,1fr)]">
+      <nav className="flex gap-1 overflow-x-auto lg:block lg:space-y-1" aria-label="设置分类">{SECTIONS.map(([key, label, Icon]) => <button key={key} onClick={() => setSection(key)} className={`flex shrink-0 items-center gap-2 rounded-md px-3 py-2 text-left text-sm lg:w-full ${section === key ? 'bg-primary text-primary-foreground' : 'hover:bg-accent'}`}><Icon className="h-4 w-4" />{label}</button>)}</nav>
+      <div className="min-w-0">{section === 'site' && <Site state={state} up={up}/>} {section === 'auth' && <Auth state={state} up={up}/>} {section === 'domains' && <Domains state={state} up={up}/>} {section === 'mail' && <MailSettings state={state} up={up}/>} {section === 'reply' && <AutoReplyRules state={state} up={up}/>} {section === 'webhook' && <Webhook state={state} up={up}/>} {section === 'ai' && <AI state={state} up={up}/>} {section === 'environment' && <Environment state={state} up={up}/>}<OptionGuide /></div>
     </div>
-  )
-}
-
-function Section({ title, children }) {
-  return <Card className="p-4"><h3 className="mb-3 text-sm font-semibold text-muted-foreground">{title}</h3><div className="space-y-3">{children}</div></Card>
-}
-function Field({ label, value, onChange, type = 'text', placeholder }) {
-  return <div className="flex items-center gap-3">
-    <label className="w-40 shrink-0 text-sm">{label}</label>
-    <Input type={type} value={value ?? ''} placeholder={placeholder} onChange={e => onChange(e.target.value)} className="flex-1" />
   </div>
 }
-function ToggleRow({ label, value, onChange }) {
-  return <div className="flex items-center gap-3"><label className="w-40 shrink-0 text-sm">{label}</label><input type="checkbox" checked={!!value} onChange={e => onChange(e.target.checked)} /></div>
-}
+
+function apiQuery() { const [data, setData] = useState(null); const [error, setError] = useState(''); const refetch = () => api('/admin/runtime_config').then(r => { if (r.status === 200) setData(r.data); else setError(r.data || '加载失败') }).catch(e => setError(e.message)); useEffect(() => { refetch() }, []); return useMemo(() => ({ data, error, refetch }), [data, error]) }
+function useQueryData(path) { const [data, setData] = useState(null); const refetch = () => api(path).then(r => r.status === 200 && setData(r.data)); useEffect(() => { refetch() }, [path]); return { data, refetch } }
+function Section({ title, description, children }) { return <Card className="p-4 sm:p-5"><h3 className="font-semibold">{title}</h3>{description && <p className="mt-1 break-words text-sm text-muted-foreground">{description}</p>}<div className="mt-4 space-y-4">{children}</div></Card> }
+function Field({ label, help, value, onChange, type = 'text', placeholder }) { const id = `setting-${encodeURIComponent(label)}`; return <div className="grid min-w-0 gap-1 sm:grid-cols-[190px_minmax(0,1fr)] sm:items-center"><div className="min-w-0"><label htmlFor={id} className="text-sm font-medium">{label}</label>{help && <p className="break-words text-xs text-muted-foreground">{help}</p>}</div><Input id={id} type={type} value={value ?? ''} placeholder={placeholder} onChange={e => onChange(type === 'number' ? Number(e.target.value) : e.target.value)} /></div> }
+function Toggle({ label, help, value, onChange }) { return <label className="flex min-w-0 items-start justify-between gap-4 rounded-md border border-border px-3 py-2"><span className="min-w-0"><span className="block break-words text-sm font-medium">{label}</span>{help && <span className="block break-words text-xs text-muted-foreground">{help}</span>}</span><input className="mt-1 h-4 w-4 shrink-0 accent-[hsl(var(--primary))]" type="checkbox" checked={!!value} onChange={e => onChange(e.target.checked)} /></label> }
+function Site({ state, up }) { return <Section title="站点与外观" description="控制首页显示的标题、公告和语言。"><Field label="站点标题" value={state.title} onChange={v => up('title', v)}/><Field label="公告" value={state.announcement} onChange={v => up('announcement', v)}/><Field label="版权信息" value={state.copyright} onChange={v => up('copyright', v)}/><Field label="联系邮箱" type="email" value={state.admin_contact} onChange={v => up('admin_contact', v)}/><div className="grid gap-1 sm:grid-cols-[190px_minmax(0,1fr)] sm:items-center"><label htmlFor="setting-language" className="text-sm font-medium">默认语言</label><Select id="setting-language" value={state.default_lang || 'zh'} onChange={e => up('default_lang', e.target.value)}><option value="zh">中文</option><option value="en">English</option></Select></div></Section> }
+function Auth({ state, up }) { return <Section title="认证与 API Key" description="用户账户负责登录；API Key 供自动化程序调用兼容 API。站点访问密码已停用，旧接口仍保留兼容。"><Field label="管理员密码" help="留空保持现有密码；不会回显当前密码" value={state.admin_password} onChange={v => up('admin_password', v)} placeholder="输入新密码后保存"/><Field label="API Key" help="用于 x-api-key 访问兼容接口" value={state.api_key} onChange={v => up('api_key', v)} placeholder="留空关闭"/><Field label="限流（每分钟）" type="number" help="默认 1000；填 0 表示关闭" value={state.rate_limit_per_minute ?? 1000} onChange={v => up('rate_limit_per_minute', Math.max(0, v || 0))}/></Section> }
+function Domains({ state, up }) { const domains = state.domains || []; const defaults = state.default_domains || []; const randomDomains = state.random_subdomain_domains || []; const [newDomain, setNewDomain] = useState(''); const add = () => { const d = newDomain.trim().toLowerCase(); if (d && !domains.includes(d)) { up('domains', [...domains, d]); if (!defaults.length) up('default_domains', [d]); setNewDomain('') } }; const remove = d => { up('domains', domains.filter(x => x !== d)); up('default_domains', defaults.filter(x => x !== d)); up('random_subdomain_domains', randomDomains.filter(x => x !== d)) }; const toggleDefault = d => up('default_domains', defaults.includes(d) ? defaults.filter(x => x !== d) : [...defaults, d]); const toggleRandom = d => up('random_subdomain_domains', randomDomains.includes(d) ? randomDomains.filter(x => x !== d) : [...randomDomains, d]); return <Section title="域名与新建邮箱" description="域名是新建邮箱的后缀。SMTP/MX 接收新域名需要重启服务。"><div className="flex flex-wrap gap-2"><Input className="max-w-sm" value={newDomain} placeholder="例如 mail.example.com" onChange={e => setNewDomain(e.target.value)} onKeyDown={e => e.key === 'Enter' && add()}/><Button size="sm" onClick={add}>添加域名</Button><a className="inline-flex h-9 items-center rounded-md border border-border px-3 text-sm hover:bg-accent" href="/docs/domain-setup.html" target="_blank" rel="noreferrer">查看域名配置教程</a></div><div className="space-y-2">{domains.map(d => <div key={d} className="flex flex-wrap items-center gap-3 rounded-md border border-border px-3 py-2"><span className="min-w-0 flex-1 break-all font-mono text-sm">{d}</span><label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={defaults.includes(d)} onChange={() => toggleDefault(d)}/>默认</label><label className="flex items-center gap-2 text-xs"><input type="checkbox" checked={randomDomains.includes(d)} onChange={() => toggleRandom(d)}/>允许随机子域</label><Button size="sm" variant="ghost" onClick={() => remove(d)}>移除</Button></div>)}</div><Field label="随机子域长度" type="number" help="生成 name@随机值.域名，长度 1-63" value={state.random_subdomain_length || 8} onChange={v => up('random_subdomain_length', Math.min(63, Math.max(1, v || 1)))}/><Field label="邮箱名前缀" help="留空表示不强制前缀" value={state.prefix} onChange={v => up('prefix', v)}/><div className="grid gap-3 sm:grid-cols-2"><Field label="最小长度" type="number" value={state.min_address_len || 1} onChange={v => up('min_address_len', Math.max(1, v || 1))}/><Field label="最大长度" type="number" value={state.max_address_len || 30} onChange={v => up('max_address_len', Math.max(1, v || 30))}/></div><Toggle label="允许用户新建邮箱" value={state.enable_user_create_email} onChange={v => up('enable_user_create_email', v)}/><Toggle label="禁止自定义邮箱名" value={state.disable_custom_address_name} onChange={v => up('disable_custom_address_name', v)}/></Section> }
+function MailSettings({ state, up }) { return <Section title="邮件规则" description="控制邮件删除、已读状态、未知地址和垃圾邮件检查。邮箱凭据只使用 Address JWT，不生成独立密码。"><Toggle label="允许用户删除邮件" value={state.enable_user_delete_email} onChange={v => up('enable_user_delete_email', v)}/><Toggle label="启用已读状态" value={state.enable_mail_read_status} onChange={v => up('enable_mail_read_status', v)}/><Toggle label="启用垃圾邮件检查" value={state.enable_check_junk_mail} onChange={v => up('enable_check_junk_mail', v)}/><Toggle label="不存在的邮箱拒收邮件" help="SMTP 和外部导入都会拒绝不存在的收件地址" value={state.block_unknown_address} onChange={v => up('block_unknown_address', v)}/><div><label htmlFor="setting-junk-list" className="text-sm font-medium">垃圾邮件检查项</label><p className="text-xs text-muted-foreground">每行一个：spf、dkim、dmarc</p><Textarea id="setting-junk-list" rows={3} value={(state.junk_mail_check_list || []).join('\n')} onChange={e => up('junk_mail_check_list', e.target.value.split(/\r?\n/).map(x => x.trim().toLowerCase()).filter(Boolean))}/></div><SenderBlockList/><div><label htmlFor="setting-forward-list" className="text-sm font-medium">转发地址列表</label><Textarea id="setting-forward-list" rows={3} value={(state.forward_address_list || []).join('\n')} onChange={e => up('forward_address_list', e.target.value.split(/\r?\n/).map(x => x.trim()).filter(Boolean))}/></div></Section> }
+function SenderBlockList() { const q = useQueryData('/admin/account_settings'); const data = q.data || {}; const [value, setValue] = useState(null); useEffect(() => { if (q.data && value === null) setValue((q.data.fromBlockList || []).join('\n')) }, [q.data, value]); const save = async () => { const r = await api('/admin/account_settings', 'POST', {...data, fromBlockList: (value || '').split(/\r?\n/).map(x => x.trim()).filter(Boolean)}); if (r.status === 200) { q.refetch(); alert('发件人黑名单已保存') } else alert(r.data || '保存失败') }; return <div><label htmlFor="setting-sender-block" className="text-sm font-medium">发件人或域名黑名单</label><p className="text-xs text-muted-foreground">每行一个片段，匹配发件地址时拒收</p><Textarea id="setting-sender-block" rows={3} value={value ?? ''} onChange={e => setValue(e.target.value)}/><Button className="mt-2" size="sm" variant="outline" onClick={save}>保存黑名单</Button></div> }
+function AutoReplyRules({ state, up }) { const q = useQueryData('/admin/auto_reply/rules'); const [form, setForm] = useState(null); const rules = q.data?.results || []; const edit = r => setForm({...r, enabled: !!r.enabled}); const save = async () => { const r = await api('/admin/auto_reply/rules', 'POST', form); if (r.status === 200) { setForm(null); q.refetch() } else alert(r.data || '保存失败') }; return <Section title="自动回复规则" description="按邮箱配置收到邮件后的自动回复；发件人前缀支持普通前缀或 /正则/。"><Toggle label="启用自动回复功能" help="保存页面顶部设置后生效" value={state.enable_auto_reply} onChange={v => up('enable_auto_reply', v)}/><div className="flex justify-end"><Button size="sm" onClick={() => setForm({ address: '', name: '', source_prefix: '', subject: '', message: '', enabled: true })}>新增规则</Button></div><div className="divide-y divide-border rounded-md border border-border">{rules.map(r => <div key={r.id} className="flex flex-wrap items-center gap-3 px-3 py-3"><div className="min-w-0 flex-1"><div className="break-all text-sm font-medium">{r.address}</div><div className="break-words text-xs text-muted-foreground">{r.subject || '无标题'} · {r.enabled ? '已启用' : '已停用'}</div></div><Button size="sm" variant="outline" onClick={() => edit(r)}>编辑</Button><Button size="sm" variant="ghost" onClick={async () => { if (confirm('删除规则？')) { await api(`/admin/auto_reply/rules/${r.id}`, 'DELETE'); q.refetch() } }}>删除</Button></div>)}{!rules.length && <p className="px-3 py-6 text-center text-sm text-muted-foreground">暂无自动回复规则</p>}</div>{form && <div className="space-y-3 rounded-md border border-primary/40 bg-primary/5 p-4"><Field label="邮箱地址" value={form.address} onChange={v => setForm({...form, address: v})}/><Field label="发件人匹配" value={form.source_prefix} onChange={v => setForm({...form, source_prefix: v})}/><Field label="发件人名称" value={form.name} onChange={v => setForm({...form, name: v})}/><Field label="回复标题" value={form.subject} onChange={v => setForm({...form, subject: v})}/><div><label className="text-sm font-medium">回复内容</label><Textarea rows={5} value={form.message} onChange={e => setForm({...form, message: e.target.value})}/></div><Toggle label="启用规则" value={form.enabled} onChange={v => setForm({...form, enabled: v})}/><div className="flex gap-2"><Button size="sm" onClick={save}>保存</Button><Button size="sm" variant="outline" onClick={() => setForm(null)}>取消</Button></div></div>}</Section> }
+function Webhook({ state, up: setRuntime }) { const q = useQueryData('/admin/mail_webhook/settings'); const deliveries = useQueryData('/admin/mail_webhook/deliveries?limit=10'); const [form, setForm] = useState(null); useEffect(() => { if (q.data && form === null) setForm(q.data) }, [q.data, form]); const s = form || q.data || {}; const up = (k, v) => setForm({...s, [k]: v}); const save = async () => { const r = await api('/admin/mail_webhook/settings', 'POST', s); if (r.status === 200) { q.refetch(); alert('Webhook 已保存') } else alert(r.data || '保存失败') }; const test = async () => { const r = await api('/admin/mail_webhook/test', 'POST', s); alert(r.status === 200 ? '测试成功' : (r.data || '测试失败')); deliveries.refetch() }; return <Section title="Webhook" description="将新邮件推送到外部服务。使用事件 ID、时间戳和 HMAC-SHA256 签名，失败后按退避策略重试。"><Toggle label="启用全局 Webhook 功能" help="保存页面顶部设置后生效" value={state.enable_webhook} onChange={v => setRuntime('enable_webhook', v)}/><Toggle label="启用管理级邮件 Webhook" value={s.enabled} onChange={v => up('enabled', v)}/><Field label="请求地址" value={s.url} onChange={v => up('url', v)} placeholder="https://example.com/webhook"/><Field label="签名密钥" help="用于校验 X-Tempmail-Signature" value={s.secret} onChange={v => up('secret', v)} /><div className="grid gap-3 sm:grid-cols-2"><Field label="超时（秒）" type="number" value={s.timeout_seconds || 10} onChange={v => up('timeout_seconds', Math.min(60, Math.max(1, v || 10)))}/><Field label="失败重试次数" type="number" value={s.max_retries ?? 3} onChange={v => up('max_retries', Math.min(5, Math.max(0, v || 0)))}/></div><div><label className="text-sm font-medium">自定义请求头 JSON</label><Textarea rows={3} value={s.headers || ''} onChange={e => up('headers', e.target.value)} placeholder={'{\n  "Content-Type": "application/json"\n}'}/></div><div><label className="text-sm font-medium">请求体模板</label><Textarea rows={8} value={s.body || ''} onChange={e => up('body', e.target.value)} /></div><div className="flex gap-2"><Button size="sm" variant="outline" onClick={test}>发送测试</Button><Button size="sm" onClick={save}>保存 Webhook</Button></div><div><h4 className="text-sm font-medium">最近投递</h4><div className="mt-2 divide-y divide-border rounded-md border border-border">{(deliveries.data?.results || []).map(d => <div key={d.id} className="grid gap-1 px-3 py-2 text-xs sm:grid-cols-[1fr_auto_auto]"><span className="break-all">{d.endpoint}</span><span>第 {d.attempt} 次</span><span className={d.error ? 'text-destructive' : 'text-emerald-600'}>{d.error || '成功'}</span></div>)}{!deliveries.data?.results?.length && <p className="px-3 py-4 text-center text-xs text-muted-foreground">暂无投递记录</p>}</div></div></Section> }
+function AI({ state, up }) { return <Section title="AI 提取" description="从邮件正文提取验证码和链接。接口需兼容 OpenAI /v1/chat/completions。"><Toggle label="启用 AI 提取" value={state.ai_enabled} onChange={v => up('ai_enabled', v)}/><Field label="接口地址" value={state.ai_endpoint} onChange={v => up('ai_endpoint', v)} placeholder="https://api.openai.com/v1"/><Field label="AI API Key" value={state.ai_api_key} onChange={v => up('ai_api_key', v)}/><Field label="模型" value={state.ai_model} onChange={v => up('ai_model', v)} placeholder="gpt-4o-mini"/><Toggle label="仅处理白名单邮箱" value={state.ai_enable_allow_list} onChange={v => up('ai_enable_allow_list', v)}/><div><label htmlFor="setting-ai-allow-list" className="text-sm font-medium">白名单邮箱或域名</label><Textarea id="setting-ai-allow-list" rows={3} value={(state.ai_allow_list || []).join('\n')} onChange={e => up('ai_allow_list', e.target.value.split(/\r?\n/).map(x => x.trim()).filter(Boolean))}/></div><Toggle label="启用正则回退" value={state.ai_enable_regex_fallback} onChange={v => up('ai_enable_regex_fallback', v)}/></Section> }
+function Environment({ state, up }) { const values = state.environment || {}; const keys = Object.keys(values).sort(); const set = (key, value) => up('environment', { ...values, [key]: value }); return <Section title="环境变量与高级配置" description="这里列出当前 .env 配置。保存会同步文件；监听、SMTP、JWT、Telegram、S3 等启动配置需要重启容器。"><div className="space-y-3">{keys.map(key => <div key={key} className="grid gap-1 sm:grid-cols-[240px_minmax(0,1fr)] sm:items-center"><label htmlFor={`env-${key}`} className="break-all font-mono text-xs">{key}</label><Input id={`env-${key}`} value={values[key] ?? ''} onChange={e => set(key, e.target.value)}/></div>)}</div>{!keys.length && <p className="text-sm text-muted-foreground">未读取到 .env，请确认 ENV_SYNC_PATH 和 Docker 挂载。</p>}</Section> }
+function OptionGuide() { const items = [['管理员密码', '用户账户登录和管理接口认证；不会由接口回传。'], ['API Key', '供自动化程序通过 x-api-key 调用兼容 API。'], ['限流', '按客户端和路径限制每分钟请求数，默认 1000，0 表示关闭。'], ['域名', '新建邮箱允许使用的后缀；SMTP 接收新域名需重启。'], ['随机子域', '在允许的后缀前生成随机子域，例如 name@abc.example.com。'], ['邮箱凭据', 'Address JWT，用于读取邮箱、邮件和调用邮箱级 API。'], ['自动回复', '为指定邮箱按发件人匹配条件自动回复。'], ['垃圾邮件检查', '根据 SPF、DKIM、DMARC 认证结果拒收可疑邮件。'], ['未知地址拒收', '收件地址不存在时在 SMTP 和外部导入阶段拒收。'], ['Webhook', '把新邮件事件推送给外部服务，支持模板、请求头和签名。'], ['环境变量', '同步部署配置；启动级配置修改后需重启。']]; return <details className="mt-4 rounded-md border border-border bg-card p-4"><summary className="cursor-pointer text-sm font-semibold">查看全部选项说明</summary><dl className="mt-3 grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2">{items.map(([term, desc]) => <div key={term}><dt className="font-medium">{term}</dt><dd className="mt-0.5 break-words text-xs text-muted-foreground">{desc}</dd></div>)}</dl></details> }

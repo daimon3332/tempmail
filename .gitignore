@@ -26,9 +26,13 @@ web/dist/*
 reference/
 
 # misc
+plan.md
 *.log
 tmp/
 temp/
+.deploy.tar.gz
+AGENTS.md
+CLAUDE.md
 .DS_Store
 .vscode/
 .idea/

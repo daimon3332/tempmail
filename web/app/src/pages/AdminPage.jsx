@@ -1,60 +1,59 @@
 import { useState } from 'react'
-import { LayoutDashboard, Mail, Users, Send, Shield, Activity, Database, Settings, BookOpen, LogOut } from 'lucide-react'
+import { LayoutDashboard, Mail, Users, Send, Activity, Database, Settings, LogOut, ScrollText } from 'lucide-react'
 import Layout from '../components/Layout'
-import { Button, Input, Card } from '../components/ui'
+import { Button, Input } from '../components/ui'
 import { useApp } from '../context/AppContext'
-import api, { setAdmin } from '../lib/api'
+import api, { setAdmin, state, clearUser, clearAddress } from '../lib/api'
 import { sha256 } from '../lib/utils'
 import StatsPage from './admin/StatsPage'
 import AddressPage from './admin/AddressPage'
 import UsersPage from './admin/UserPage'
 import MailsPage from './admin/MailsPage'
-import RolesPage from './admin/RolesPage'
 import TelegramPage from './admin/TelegramPage'
 import MaintenancePage from './admin/MaintenancePage'
 import ConfigPage from './admin/ConfigPage'
+import OperationLogPage from './admin/OperationLogPage'
 
-export default function AdminPage() {
+export default function AdminPage({ initialTab = 'stats' }) {
   const { t } = useApp()
-  const [authed, setAuthed] = useState(!!localStorage.getItem('tm_admin_auth'))
-  const [tab, setTab] = useState('stats')
+  const [authed, setAuthed] = useState(!!sessionStorage.getItem('tm_admin_auth') || state.isAdmin)
+  const [tab, setTab] = useState(initialTab)
   if (!authed) return <AdminLogin onOk={() => setAuthed(true)} t={t} />
   const nav = [
     ['stats', t('adminStats'), LayoutDashboard],
     ['address', t('adminAddress'), Mail],
     ['users', t('adminUsers'), Users],
     ['mails', t('adminMails'), Send],
-    ['roles', t('adminRoles'), Shield],
-    ['telegram', '电报机器人', Activity],
-    ['maintenance', t('adminCleanup'), Database],
-    ['config', '配置', Settings],
-    ['docs', 'API 文档', BookOpen],
+    ['telegram', 'Telegram 机器人', Activity],
+    ['maintenance', '数据维护', Database],
+    ['config', '系统设置', Settings],
+    ['logs', '操作日志', ScrollText],
   ]
   return (
     <Layout>
-      <div className="flex h-[calc(100vh-3.5rem)]">
-        <aside className="w-52 shrink-0 border-r border-border p-3">
+      <div className="admin-workspace">
+        <aside className="admin-sidebar">
+          <div className="mb-3 px-2 text-xs font-semibold text-muted-foreground">管理中心</div>
           <div className="space-y-1">
             {nav.map(([k, label, Icon]) => (
-              <button key={k} onClick={() => setTab(k)} className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm ${tab === k ? 'bg-accent' : 'hover:bg-accent'}`}>
+              <button key={k} onClick={() => setTab(k)} className={`admin-nav ${tab === k ? 'is-active' : ''}`}>
                 <Icon className="h-4 w-4" /> {label}
               </button>
             ))}
           </div>
           <div className="mt-4 border-t border-border pt-3">
-            <Button size="sm" variant="outline" className="w-full" onClick={() => { setAdmin(''); setAuthed(false) }}><LogOut className="h-4 w-4" /> {t('logout')}</Button>
+            <Button size="sm" variant="outline" className="w-full" onClick={() => { setAdmin(''); clearUser(); clearAddress(); setAuthed(false); location.href = '/login' }}><LogOut className="h-4 w-4" /> {t('logout')}</Button>
           </div>
         </aside>
-        <main className="min-w-0 flex-1 overflow-auto p-6">
+        <main className="admin-content">
           {tab === 'stats' && <StatsPage t={t} />}
           {tab === 'address' && <AddressPage t={t} />}
           {tab === 'users' && <UsersPage t={t} />}
           {tab === 'mails' && <MailsPage t={t} />}
-          {tab === 'roles' && <RolesPage t={t} />}
           {tab === 'telegram' && <TelegramPage t={t} />}
           {tab === 'maintenance' && <MaintenancePage t={t} />}
           {tab === 'config' && <ConfigPage t={t} />}
-          {tab === 'docs' && <ApiDocs />}
+          {tab === 'logs' && <OperationLogPage />}
         </main>
       </div>
     </Layout>
@@ -81,17 +80,5 @@ function AdminLogin({ onOk, t }) {
         </div>
       </div>
     </Layout>
-  )
-}
-
-function ApiDocs() {
-  return (
-    <div className="space-y-3">
-      <h2 className="text-xl font-semibold">API 文档</h2>
-      <Card className="p-6 text-center">
-        <p className="mb-3 text-muted-foreground">完整 API 用法（认证、请求/响应约定、curl 示例、各端点说明与注意事项）。</p>
-        <a href="/docs/api" target="_blank" rel="noreferrer"><Button>打开 API 文档 <BookOpen className="ml-1 h-4 w-4" /></Button></a>
-      </Card>
-    </div>
   )
 }

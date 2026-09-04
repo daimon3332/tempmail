@@ -146,7 +146,8 @@ type limiterEntry struct {
 }
 
 func (a *App) rateLimit(key, ip string) bool {
-	if a.cfg.RateLimitPerMinute <= 0 {
+	limit := a.effective(context.Background()).RateLimitPerMinute
+	if limit <= 0 {
 		return true
 	}
 	k := key + "|" + ip
@@ -160,7 +161,7 @@ func (a *App) rateLimit(key, ip string) bool {
 		e.count = 0
 	}
 	e.count++
-	return e.count <= a.cfg.RateLimitPerMinute
+	return e.count <= limit
 }
 
 // rateLimitedPath returns true for paths upstream rate-limits.
@@ -168,7 +169,7 @@ func (a *App) rateLimitedPath(p string) bool {
 	switch {
 	case p == "/api/new_address", p == "/api/send_mail",
 		p == "/external/api/send_mail",
-		p == "/user_api/register", p == "/user_api/verify_code",
+		p == "/user_api/register", p == "/user_api/verify_code", p == "/user_api/login",
 		p == "/user_api/address/" && false:
 		return true
 	}

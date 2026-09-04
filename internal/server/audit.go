@@ -2,14 +2,19 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"net/http"
 	"strings"
 )
 
-// audit records a write operation by an admin into operation_log.
-func (a *App) audit(ctx context.Context, action, target string) {
-	a.db.Exec(ctx, `INSERT INTO operation_log (time, actor, action, target, result)
-		VALUES (datetime('now'), ?, ?, ?, 'ok')`, "admin", action, target)
+func (a *App) auditRequest(r *http.Request, status int) {
+	result := "ok"
+	if status >= 400 {
+		result = http.StatusText(status)
+	}
+	a.db.Exec(r.Context(), `INSERT INTO operation_log (time, actor, action, target, result, detail)
+		VALUES (datetime('now'), ?, ?, ?, ?, ?)`, "admin", r.Method, r.URL.Path, result,
+		clientIP(r, a.cfg.TrustedProxies))
 }
 
 func (a *App) operationLogList(w http.ResponseWriter, r *http.Request) {
@@ -55,15 +60,18 @@ func (a *App) operationLogClear(w http.ResponseWriter, r *http.Request) {
 func (a *App) isAPIKeyValid(r *http.Request) bool {
 	rc := a.effective(r.Context())
 	if rc.APIKey == "" {
-		return true
+		return false
 	}
 	key := r.Header.Get("x-api-key")
 	if key == "" {
-		if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
-			key = strings.TrimPrefix(h, "Bearer ")
+		if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+			key = strings.TrimSpace(auth[7:])
 		}
 	}
-	return key == rc.APIKey
+	if len(key) != len(rc.APIKey) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(key), []byte(rc.APIKey)) == 1
 }
 
 // apiKeyGuard rejects requests that fail the runtime API key check.
@@ -79,6 +87,13 @@ func (a *App) apiKeyGuard(next http.HandlerFunc) http.HandlerFunc {
 
 // sitePasswords returns the effective site password list (runtime override or env).
 func (a *App) sitePasswords(ctx context.Context) []string {
+	if _, ok := a.readRuntime(ctx); ok {
+		rc := a.effective(ctx)
+		if rc.SitePasswordEnabled && rc.SitePassword != "" {
+			return []string{rc.SitePassword}
+		}
+		return nil
+	}
 	rc := a.effective(ctx)
 	if rc.SitePasswordEnabled && rc.SitePassword != "" {
 		return []string{rc.SitePassword}
@@ -90,6 +105,13 @@ func (a *App) usedSitePassword() bool { return len(a.cfg.Passwords) > 0 }
 
 // adminPasswords returns the effective admin password list.
 func (a *App) adminPasswords(ctx context.Context) []string {
+	if _, ok := a.readRuntime(ctx); ok {
+		rc := a.effective(ctx)
+		if rc.AdminPasswordEnabled && rc.AdminPassword != "" {
+			return []string{rc.AdminPassword}
+		}
+		return nil
+	}
 	rc := a.effective(ctx)
 	if rc.AdminPasswordEnabled && rc.AdminPassword != "" {
 		return []string{rc.AdminPassword}

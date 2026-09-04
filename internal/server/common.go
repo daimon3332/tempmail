@@ -4,13 +4,17 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math/big"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -116,8 +120,8 @@ func findAllowedDomain(domain string, allow []string, subdomainMatch bool) strin
 	return domain
 }
 
-func (a *App) allowRandomSubdomain(domain string) bool {
-	for _, d := range a.cfg.RandomSubdomainDomains {
+func (a *App) allowRandomSubdomain(ctx context.Context, domain string) bool {
+	for _, d := range a.effective(ctx).RandomSubdomainDomains {
 		if d == strings.ToLower(domain) {
 			return true
 		}
@@ -217,7 +221,7 @@ func (a *App) newAddress(ctx context.Context, o newAddressOpts) (*newAddressResu
 	}
 	allow := o.allowDomains
 	if len(allow) == 0 {
-		allow = a.cfg.Domains
+		allow = a.effective(ctx).Domains
 	}
 	domain := strings.ToLower(strings.TrimSpace(o.domain))
 	if domain == "" && len(allow) > 0 {
@@ -231,14 +235,14 @@ func (a *App) newAddress(ctx context.Context, o newAddressOpts) (*newAddressResu
 	subMatch := a.subdomainMatchEnabled(ctx)
 	manualSub := false
 	for _, base := range allow {
-		if a.allowRandomSubdomain(base) && isDomainOrSubdomain(domain, base) {
+		if a.allowRandomSubdomain(ctx, base) && isDomainOrSubdomain(domain, base) {
 			manualSub = true
 		}
 	}
 	if domain == "" || findAllowedDomain(domain, allow, subMatch || manualSub) == "" {
 		return nil, errors.New("Invalid domain")
 	}
-	if o.enableRandomSubdomain && !a.allowRandomSubdomain(domain) {
+	if o.enableRandomSubdomain && !a.allowRandomSubdomain(ctx, domain) {
 		return nil, errors.New("Random subdomain is not allowed for this domain")
 	}
 	attempts := 1
@@ -248,7 +252,7 @@ func (a *App) newAddress(ctx context.Context, o newAddressOpts) (*newAddressResu
 	for i := 0; i < attempts; i++ {
 		addrDomain := domain
 		if o.enableRandomSubdomain {
-			n := a.cfg.RandomSubdomainLength
+			n := rc.RandomSubdomainLength
 			if n < 1 {
 				n = 1
 			}
@@ -276,17 +280,11 @@ func (a *App) newAddress(ctx context.Context, o newAddressOpts) (*newAddressResu
 		if err != nil || !found {
 			return nil, errors.New("Failed to create address")
 		}
-		var password *string
-		if a.cfg.EnableAddressPassword {
-			plain := randomString(8, "abcdefghijklmnopqrstuvwxyz0123456789")
-			a.db.Exec(ctx, `UPDATE address SET password = ?, updated_at = datetime('now') WHERE name = ?`, sha256Hex(plain), address)
-			password = &plain
-		}
 		token, err := a.jwt.AddressToken(address, id)
 		if err != nil {
 			return nil, err
 		}
-		return &newAddressResult{JWT: token, Address: address, Password: password, AddressID: id}, nil
+		return &newAddressResult{JWT: token, Address: address, Password: nil, AddressID: id}, nil
 	}
 	return nil, errors.New("Failed to create address")
 }
@@ -305,8 +303,7 @@ func (a *App) touchUserAddresses(ctx context.Context, userID int64) {
 		AND (updated_at IS NULL OR updated_at < datetime('now', '-1 day'))`, userID)
 }
 
-// listQuery mirrors upstream handleListQuery: {results, count} with count
-// only computed for offset 0.
+// listQuery returns a stable total count so clients can render pagination.
 func (a *App) listQuery(w http.ResponseWriter, r *http.Request, query, countQuery string, params []any,
 	limitStr, offsetStr, orderBy string, hidden ...string) {
 	limit, offset := atoi(limitStr), atoi(offsetStr)
@@ -334,9 +331,7 @@ func (a *App) listQuery(w http.ResponseWriter, r *http.Request, query, countQuer
 		resolveRaw(row)
 	}
 	var count int64
-	if offset == 0 {
-		count, _ = a.db.Count(ctx, countQuery, params...)
-	}
+	count, _ = a.db.Count(ctx, countQuery, params...)
 	jsonResp(w, 200, map[string]any{"results": rows, "count": count})
 }
 
@@ -384,23 +379,26 @@ func (a *App) userRolePrefix(ctx context.Context, r *http.Request) *string {
 func (a *App) allowDomainsFor(ctx context.Context, r *http.Request) []string {
 	u := userOf(r)
 	if u == nil {
-		return a.cfg.DefaultDomains
+		return a.effective(ctx).DefaultDomains
 	}
 	role, _ := a.roles.UserRole(ctx, claimInt(u, "user_id"))
 	if role != nil && len(role.Domains) > 0 {
 		return role.Domains
 	}
-	return a.cfg.DefaultDomains
+	return a.effective(ctx).DefaultDomains
 }
 
 // ---- webhook ----
 
 type webhookSettings struct {
-	Enabled bool   `json:"enabled"`
-	URL     string `json:"url"`
-	Method  string `json:"method"`
-	Headers string `json:"headers"`
-	Body    string `json:"body"`
+	Enabled        bool   `json:"enabled"`
+	URL            string `json:"url"`
+	Method         string `json:"method"`
+	Headers        string `json:"headers"`
+	Body           string `json:"body"`
+	Secret         string `json:"secret,omitempty"`
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
+	MaxRetries     int    `json:"max_retries,omitempty"`
 }
 
 func defaultWebhookSettings() webhookSettings {
@@ -409,7 +407,7 @@ func defaultWebhookSettings() webhookSettings {
 		"raw": "${raw}", "parsedText": "${parsedText}", "parsedHtml": "${parsedHtml}",
 		"aiExtractType": "${aiExtractType}", "aiExtractResult": "${aiExtractResult}", "aiExtractResultText": "${aiExtractResultText}",
 	}, "", "  ")
-	return webhookSettings{Method: "POST", Headers: "{\n  \"Content-Type\": \"application/json\"\n}", Body: string(body)}
+	return webhookSettings{Method: "POST", Headers: "{\n  \"Content-Type\": \"application/json\"\n}", Body: string(body), TimeoutSeconds: 10, MaxRetries: 3}
 }
 
 type adminWebhookSettings struct {
@@ -417,7 +415,43 @@ type adminWebhookSettings struct {
 	AllowList       []string `json:"allowList"`
 }
 
-func sendWebhook(s webhookSettings, values map[string]any) error {
+func validateWebhookSettings(s webhookSettings) error {
+	endpoint := strings.TrimSpace(s.URL)
+	if endpoint == "" && s.Enabled {
+		return errors.New("webhook URL is required")
+	}
+	if endpoint != "" {
+		u, err := url.Parse(endpoint)
+		if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+			return errors.New("webhook URL must be http or https")
+		}
+	}
+	method := strings.ToUpper(strings.TrimSpace(s.Method))
+	if method == "" {
+		method = "POST"
+	}
+	if method != "POST" && method != "PUT" && method != "PATCH" {
+		return errors.New("webhook method must be POST, PUT or PATCH")
+	}
+	if s.Headers != "" {
+		var headers map[string]string
+		if json.Unmarshal([]byte(s.Headers), &headers) != nil {
+			return errors.New("webhook headers must be valid JSON")
+		}
+	}
+	if len(s.Body) > 256*1024 {
+		return errors.New("webhook body template is too large")
+	}
+	if s.TimeoutSeconds < 0 || s.TimeoutSeconds > 60 {
+		return errors.New("webhook timeout must be between 1 and 60 seconds")
+	}
+	if s.MaxRetries < 0 || s.MaxRetries > 5 {
+		return errors.New("webhook retries must be between 0 and 5")
+	}
+	return nil
+}
+
+func sendWebhook(s webhookSettings, values map[string]any) (int, error) {
 	body := s.Body
 	for k, v := range values {
 		enc, _ := json.Marshal(v)
@@ -435,21 +469,60 @@ func sendWebhook(s webhookSettings, values map[string]any) error {
 	}
 	req, err := http.NewRequest(method, s.URL, strings.NewReader(body))
 	if err != nil {
-		return err
+		return 0, err
 	}
 	for k, v := range headers {
 		req.Header.Set(k, v)
 	}
-	client := &http.Client{Timeout: 20 * time.Second}
+	if s.Secret != "" {
+		ts := fmt.Sprint(time.Now().Unix())
+		sig := hmac.New(sha256.New, []byte(s.Secret))
+		_, _ = sig.Write([]byte(ts + "." + body))
+		req.Header.Set("X-Tempmail-Timestamp", ts)
+		req.Header.Set("X-Tempmail-Signature", "sha256="+hex.EncodeToString(sig.Sum(nil)))
+	}
+	req.Header.Set("X-Tempmail-Event-ID", fmt.Sprint(values["id"]))
+	timeout := s.TimeoutSeconds
+	if timeout < 1 {
+		timeout = 10
+	}
+	client := &http.Client{Timeout: time.Duration(timeout) * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("send webhook error: %d %s", resp.StatusCode, resp.Status)
+		return resp.StatusCode, fmt.Errorf("send webhook error: %s", resp.Status)
 	}
-	return nil
+	return resp.StatusCode, nil
+}
+
+func (a *App) deliverWebhook(ctx context.Context, s webhookSettings, values map[string]any) {
+	attempts := s.MaxRetries + 1
+	if attempts < 1 {
+		attempts = 1
+	}
+	delays := []time.Duration{time.Second, 5 * time.Second, 30 * time.Second, 2 * time.Minute, 5 * time.Minute}
+	for attempt := 1; attempt <= attempts; attempt++ {
+		status, err := sendWebhook(s, values)
+		errText := ""
+		if err != nil {
+			errText = err.Error()
+		}
+		_, _ = a.db.Exec(ctx, `INSERT INTO webhook_deliveries(event_id,endpoint,attempt,status_code,error) VALUES(?,?,?,?,?)`, fmt.Sprint(values["id"]), s.URL, attempt, status, errText)
+		if err == nil {
+			return
+		}
+		if attempt < attempts {
+			delay := delays[attempt-1]
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(delay):
+			}
+		}
+	}
 }
 
 func (a *App) webhookValues(id any, from, to string, raw string, parsed *mailparse.Mail, ai *ExtractResult) map[string]any {
@@ -477,7 +550,7 @@ func (a *App) webhookValues(id any, from, to string, raw string, parsed *mailpar
 
 // TriggerWebhook is invoked by the inbound SMTP pipeline after a mail is stored.
 func (a *App) TriggerWebhook(ctx context.Context, address string, mailID int64, raw string, parsed *mailparse.Mail, metadata string) {
-	if !a.cfg.EnableWebhook {
+	if !a.effective(ctx).EnableWebhook {
 		return
 	}
 	var hooks []webhookSettings
@@ -498,9 +571,7 @@ func (a *App) TriggerWebhook(ctx context.Context, address string, mailID int64, 
 		from = parsed.Sender
 	}
 	for _, h := range hooks {
-		if err := sendWebhook(h, a.webhookValues(mailID, from, address, raw, parsed, aiFromMetadata(metadata))); err != nil {
-			fmt.Println("webhook:", err)
-		}
+		a.deliverWebhook(context.Background(), h, a.webhookValues(mailID, from, address, raw, parsed, aiFromMetadata(metadata)))
 	}
 }
 

@@ -11,6 +11,7 @@ services:
     volumes:
       - ./data:/data
       - ./backups:/backups:ro
+      - ./.env:/config/.env
     logging:
       driver: json-file
       options:

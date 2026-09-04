@@ -1,7 +1,7 @@
 const msg = {
   zh: {
     mail: '邮箱', new: '创建邮箱', inbox: '收件箱', sent: '发件箱', settings: '邮箱设置',
-    address: '邮箱地址', credential: '地址凭据', login: '登录邮箱', create: '创建邮箱',
+    address: '邮箱', credential: '邮箱凭据', login: '登录邮箱', create: '创建邮箱',
     userCenter: '用户中心', admin: '管理后台', help: '帮助', dark: '深色', light: '浅色',
     random: '随机域名', prefix: '前缀', domain: '域名', logout: '退出',
     empty: '暂无邮件', loading: '加载中', markRead: '已读', delete: '删除', refresh: '刷新',
@@ -9,7 +9,7 @@ const msg = {
     from: '发件人', to: '收件人', subject: '主题', date: '日期', noSubject: '(无主题)',
     deleteMail: '删除这封邮件？', copied: '已复制', copyFailed: '复制失败',
     created: '创建成功', createFailed: '创建失败', loginOk: '登录成功',
-    newAddress: '创建地址', send: '发送', sendTo: '收件人', content: '内容',
+    newAddress: '新建邮箱', send: '发送', sendTo: '收件人', content: '内容',
     welcome: '欢迎', logoutOk: '已退出', addressBook: '地址列表', emptyAddress: '无地址',
     adminStats: '统计', adminAddress: '邮箱地址', adminUsers: '用户', adminMails: '邮件',
     adminRoles: '角色', adminSettings: '设置', adminCleanup: '清理', newRole: '新建角色',

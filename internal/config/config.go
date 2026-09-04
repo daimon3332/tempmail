@@ -51,6 +51,7 @@ type Config struct {
 
 	Passwords       []string
 	AdminPasswords  []string
+	APIKey          string
 	AdminUserRole   string
 	UserDefaultRole string
 	UserRoles       []UserRole
@@ -104,6 +105,7 @@ type Config struct {
 	AIExtractAPIKey    string
 	AIExtractModel     string
 	RateLimitPerMinute int
+	EnvSyncPath        string
 }
 
 func env(key, def string) string {
@@ -190,8 +192,9 @@ func Load() *Config {
 
 		Passwords:       envList("PASSWORDS"),
 		AdminPasswords:  envList("ADMIN_PASSWORDS"),
-		AdminUserRole:   os.Getenv("ADMIN_USER_ROLE"),
-		UserDefaultRole: os.Getenv("USER_DEFAULT_ROLE"),
+		APIKey:          os.Getenv("API_KEY"),
+		AdminUserRole:   env("ADMIN_USER_ROLE", "admin"),
+		UserDefaultRole: env("USER_DEFAULT_ROLE", "user"),
 		NoLimitSendRole: envList("NO_LIMIT_SEND_ROLE"),
 
 		EnableUserCreateEmail:             envBool("ENABLE_USER_CREATE_EMAIL", true),
@@ -239,7 +242,8 @@ func Load() *Config {
 		AIExtractEndpoint:  os.Getenv("AI_EXTRACT_ENDPOINT"),
 		AIExtractAPIKey:    os.Getenv("AI_EXTRACT_API_KEY"),
 		AIExtractModel:     env("AI_EXTRACT_MODEL", "gpt-4o-mini"),
-		RateLimitPerMinute: envInt("RATE_LIMIT_PER_MINUTE", 30),
+		RateLimitPerMinute: envInt("RATE_LIMIT_PER_MINUTE", 1000),
+		EnvSyncPath:        env("ENV_SYNC_PATH", "/config/.env"),
 	}
 
 	if raw := os.Getenv("USER_ROLES"); raw != "" {

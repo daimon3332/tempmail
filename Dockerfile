@@ -19,7 +19,7 @@ ARG VERSION=dev
 RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /tempmail ./cmd/tempmail
 
 FROM alpine:3.21
-RUN apk add --no-cache ca-certificates tzdata && mkdir -p /data
+RUN apk add --no-cache ca-certificates tzdata && mkdir -p /data /config
 COPY --from=backend /tempmail /usr/local/bin/tempmail
 ENV DB_PATH=/data/tempmail.db HTTP_ADDR=:8080 SMTP_ADDR=:25
 EXPOSE 8080 25

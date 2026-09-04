@@ -56,6 +56,17 @@ CREATE TABLE IF NOT EXISTS auto_reply_mails (
 );
 CREATE INDEX IF NOT EXISTS idx_auto_reply_mails_address ON auto_reply_mails(address);
 
+CREATE TABLE IF NOT EXISTS webhook_deliveries (
+    id INTEGER PRIMARY KEY,
+    event_id TEXT,
+    endpoint TEXT,
+    attempt INTEGER,
+    status_code INTEGER,
+    error TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_created_at ON webhook_deliveries(created_at);
+
 CREATE TABLE IF NOT EXISTS address_sender (
     id INTEGER PRIMARY KEY,
     address TEXT UNIQUE,
@@ -84,7 +95,9 @@ CREATE TABLE IF NOT EXISTS settings (
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY,
     user_email TEXT UNIQUE NOT NULL,
+    username TEXT UNIQUE,
     password TEXT NOT NULL,
+    password_ciphertext TEXT,
     user_info TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -144,10 +157,40 @@ CREATE TABLE IF NOT EXISTS role_configs (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS user_limits (
+    user_id INTEGER PRIMARY KEY,
+    max_address_count INTEGER DEFAULT -1,
+    max_mail_count INTEGER DEFAULT -1,
+    monthly_address_quota INTEGER DEFAULT -1,
+    monthly_receive_quota INTEGER DEFAULT -1,
+    can_send_mail INTEGER DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS user_usage_monthly (
+    user_id INTEGER NOT NULL,
+    month TEXT NOT NULL,
+    addresses_created INTEGER DEFAULT 0,
+    mails_received INTEGER DEFAULT 0,
+    PRIMARY KEY (user_id, month)
+);
+
+CREATE TABLE IF NOT EXISTS quota_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    address TEXT,
+    kind TEXT NOT NULL,
+    detail TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 `
 
 // Columns added over time upstream; applied idempotently for imported dumps.
 var patches = []struct{ table, column, ddl string }{
+	{"users", "username", "ALTER TABLE users ADD COLUMN username TEXT"},
+	{"users", "password_ciphertext", "ALTER TABLE users ADD COLUMN password_ciphertext TEXT"},
 	{"address", "password", "ALTER TABLE address ADD COLUMN password TEXT"},
 	{"address", "source_meta", "ALTER TABLE address ADD COLUMN source_meta TEXT"},
 	{"raw_mails", "metadata", "ALTER TABLE raw_mails ADD COLUMN metadata TEXT"},
@@ -191,6 +234,9 @@ func (d *DB) migrate(ctx context.Context) error {
 				return fmt.Errorf("patch %s.%s: %w", p.table, p.column, err)
 			}
 		}
+	}
+	if _, err := d.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS idx_users_username ON users(username) WHERE username IS NOT NULL`); err != nil {
+		return fmt.Errorf("users username index: %w", err)
 	}
 	_, err := d.ExecContext(ctx,
 		`INSERT INTO settings(key, value) VALUES('db_version', ?)

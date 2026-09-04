@@ -35,7 +35,7 @@ code.inline{background:var(--card);padding:2px 6px;border-radius:4px;font-size:1
 <a href="#auth">认证</a><a href="#conv">请求/响应约定</a><a href="#health">健康检查</a>
 <a href="#addr">地址</a><a href="#mail">邮件</a><a href="#send">发信</a><a href="#user">用户</a>
 <a href="#admin">管理员</a><a href="#role">角色与配额</a><a href="#telegram">Telegram</a>
-<a href="#agent">Agent 接入</a><a href="#err">错误与注意事项</a>
+<a href="#err">错误与注意事项</a>
 </div>
 
 <h2 id="auth">认证</h2>
@@ -49,12 +49,42 @@ code.inline{background:var(--card);padding:2px 6px;border-radius:4px;font-size:1
 <div class="note"><b>注意：</b>Address JWT 与 User JWT 不可混用，否则返回 <b>401 Invalid address credential</b>。<br>
 若在「配置页」设置了 <code class="inline">API Key</code>，第三方调用 <code class="inline">/api/*</code> 也可用 <code class="inline">x-api-key</code> 或 <code class="inline">Authorization: Bearer</code> 提供。</div>
 
+<h2 id="reference">接口逐项说明</h2>
+<p>以下按接口逐项列出请求字段、响应字段和注意事项。完整机器可读定义见 <code class="inline">GET /api/openapi.json</code>。</p>
+<h3>POST /api/new_address</h3>
+<p><b>请求头：</b>可选 <code class="inline">x-user-token</code>、<code class="inline">x-api-key</code>；开启 Turnstile 时需要 <code class="inline">cf_token</code>。</p>
+<p><b>请求 JSON：</b><code class="inline">name:string?</code>、<code class="inline">domain:string?</code>、<code class="inline">enableRandomSubdomain:boolean?</code>、<code class="inline">cf_token:string?</code>。</p>
+<p><b>响应 200：</b><code class="inline">jwt:string</code>、<code class="inline">address:string</code>、<code class="inline">address_id:number</code>、<code class="inline">password:string|null</code>。<b>注意：</b>用户登录后创建的地址会自动绑定到该用户并计入额度。</p>
+<h3>GET /api/settings</h3>
+<p><b>请求头：</b><code class="inline">Authorization: Bearer &lt;Address JWT&gt;</code>，或 API Key + <code class="inline">x-address</code>。</p>
+<p><b>响应字段：</b><code class="inline">address:string</code>、<code class="inline">address_id:number</code>、<code class="inline">send_balance:number</code>、<code class="inline">enable_send_mail:boolean</code>。<b>注意：</b>API Key 请求必须指定邮箱地址。</p>
+<h3>GET /api/parsed_mails</h3>
+<p><b>Query：</b><code class="inline">limit:number?</code>、<code class="inline">offset:number?</code>、<code class="inline">after_id:number?</code>、<code class="inline">after:string?</code>。</p>
+<p><b>响应 200：</b><code class="inline">results[]</code>（<code class="inline">id</code>、<code class="inline">sender</code>、<code class="inline">subject</code>、<code class="inline">text</code>、<code class="inline">html</code>、<code class="inline">attachments[]</code>、<code class="inline">created_at</code>）、<code class="inline">count:number</code>。<b>注意：</b>默认按最新邮件优先。</p>
+<h3>PATCH /api/mails/:id/read（兼容 POST）</h3>
+<p><b>路径：</b><code class="inline">id:number</code>。<b>请求 JSON：</b><code class="inline">isUnread:boolean</code>。<b>响应：</b><code class="inline">{"success":true}</code>。只能操作当前地址的邮件。</p>
+<h3>POST /api/send_mail</h3>
+<p><b>请求 JSON：</b><code class="inline">to_mail:string</code>、<code class="inline">to_name:string?</code>、<code class="inline">from_name:string?</code>、<code class="inline">subject:string</code>、<code class="inline">content:string</code>、<code class="inline">is_html:boolean?</code>。</p>
+<p><b>响应 200：</b><code class="inline">{"status":"ok"}</code>。<b>注意：</b>需要地址余额或用户发信权限，并受发信限额和全局请求限流影响。</p>
+<h3>POST /user_api/login</h3>
+<p><b>请求 JSON：</b><code class="inline">username:string?</code> 或原版 <code class="inline">email:string</code>，以及客户端 SHA-256 后的 <code class="inline">password:string</code>、<code class="inline">cf_token:string?</code>。</p>
+<p><b>响应 200：</b><code class="inline">jwt:string</code>。<b>注意：</b>内置管理员用户名为 <code class="inline">admin</code>；邮箱登录格式仍兼容原版。</p>
+<h3>GET /user_api/dashboard</h3>
+<p><b>请求头：</b><code class="inline">x-user-token</code>。<b>响应字段：</b><code class="inline">results[]</code>（<code class="inline">id</code>、<code class="inline">name</code>、<code class="inline">mail_count</code>、<code class="inline">unread_count</code>、<code class="inline">last_mail_at</code>）、<code class="inline">count</code>。</p>
+<h3>GET /user_api/usage</h3>
+<p><b>响应字段：</b><code class="inline">limits</code>（邮箱、邮件、月度额度、发信权限）、<code class="inline">used</code>（当前使用量和本月使用量）。月份按 UTC 计算。</p>
+<h3>GET/PATCH /admin/user_limits/:user_id</h3>
+<p><b>请求头：</b><code class="inline">x-admin-auth</code>。<b>PATCH JSON：</b><code class="inline">max_address_count</code>、<code class="inline">max_mail_count</code>、<code class="inline">monthly_address_quota</code>、<code class="inline">monthly_receive_quota</code>、<code class="inline">can_send_mail</code>；数值为 -1 表示无限。</p>
+<h3>GET /api/openapi.json</h3>
+<p><b>认证：</b>无需登录。<b>响应：</b>OpenAPI 3.0 JSON，供工具读取接口路径和基础响应说明。</p>
+
 <h2 id="conv">请求/响应约定</h2>
 <ul>
 <li>Content-Type：<code class="inline">application/json</code>（另有说明除外）。</li>
 <li>通用分页参数：<code class="inline">limit</code>（1..100，默认 20）、<code class="inline">offset</code>（>=0，默认 0）。</li>
 <li>标准响应：<code class="inline">{"success": true}</code>；错误为 <code class="inline">text/plain</code> 状态码文案。</li>
 <li>可选的 <code class="inline">x-lang: zh|en</code> 控制错误提示语言。</li>
+<li>受保护的创建、发信、注册和验证码接口默认限流为每分钟 1000 次；管理员可在配置页调整，填 0 表示关闭。当前没有独立的每秒限流。</li>
 </ul>
 
 <h2 id="health">健康检查</h2>
@@ -65,7 +95,7 @@ code.inline{background:var(--card);padding:2px 6px;border-radius:4px;font-size:1
 
 <h2 id="addr">地址</h2>
 <h3>创建地址</h3>
-<p><span class="method post">POST</span><code class="inline">/api/new_address</code>（需站点允许；匿名或已登录用户均可，取决于配置）</p>
+<p><span class="method post">POST</span><code class="inline">/api/new_address</code>（必须提供有效 API Key 或已登录用户令牌）</p>
 <pre><b>curl</b> -X POST https://tempmail.333186.xyz/api/new_address \
   -H "Content-Type: application/json" -d '{"name":"mybox","domain":"333186.xyz"}'
 # → {"jwt":"eyJ...","address":"orxmybox@333186.xyz","password":null,"address_id":12345}</pre>
@@ -88,8 +118,8 @@ code.inline{background:var(--card);padding:2px 6px;border-radius:4px;font-size:1
 <tr><td>列出已解析邮件</td><td>GET</td><td><code class="inline">/api/parsed_mails?limit=&amp;offset=</code></td></tr>
 <tr><td>取单封已解析</td><td>GET</td><td><code class="inline">/api/parsed_mail/:id</code></td></tr>
 <tr><td>列原始邮件</td><td>GET</td><td><code class="inline">/api/mails?limit=&amp;offset=&amp;after_id=</code></td></tr>
-<tr><td>取原始邮件（含 raw）</td><td>GET</td><td><code class="inline">/api/mail/:id</code></td></tr>
-<tr><td>标记已读</td><td>POST</td><td><code class="inline">/api/mails/:id/read</code> <code class="inline">{"isUnread":false}</code></td></tr>
+<tr><td>取原始邮件（含 raw）</td><td>GET</td><td><code class="inline">/api/mail/:id</code>（兼容 <code class="inline">/api/mails/:id</code>）</td></tr>
+<tr><td>标记已读</td><td>PATCH（兼容 POST）</td><td><code class="inline">/api/mails/:id/read</code> <code class="inline">{"isUnread":false}</code></td></tr>
 <tr><td>删除邮件</td><td>DELETE</td><td><code class="inline">/api/mails/:id</code></td></tr>
 </table>
 <pre><b>curl</b> -s "https://tempmail.333186.xyz/api/parsed_mails?limit=20&offset=0" \
@@ -157,15 +187,15 @@ code.inline{background:var(--card);padding:2px 6px;border-radius:4px;font-size:1
 <tr><td>MiniApp 接口</td><td>POST</td><td><code class="inline">/telegram/get_bind_address|new_address|bind_address|unbind_address|get_mail</code>（需 initData）</td></tr>
 </table>
 
-<h2 id="agent">Agent 接入（AI 助手）</h2>
-<p>面向 Claude / Codex / Cursor 等 Agent 消费临时邮箱的标准流程：</p>
-<ol>
-<li>用户在浏览器创建/登录地址，复制 <b>Address JWT</b> 与 <b>API 地址</b>（同源）。</li>
-<li>Agent 用 <code class="inline">Authorization: Bearer $JWT</code> 调 <code class="inline">/api/settings</code> 自检。</li>
-<li>轮询 <code class="inline">/api/parsed_mails</code>，按 <code class="inline">id</code> 去重，初始 3s、退避封顶 10s。</li>
-<li>验证码/链接直接读 parsed 的 <code class="inline">text</code>/<code class="inline">html</code>；需要原始字节时退回 <code class="inline">/api/mail/:id</code>。</li>
-</ol>
-<div class="note"><b>轮询纪律：</b>不要快于每秒 1 次；遇 <code class="inline">429</code> 退避重试；不要混用 Address JWT 与 User JWT。</div>
+<h2 id="extra">扩展接口</h2>
+<h3>GET /open_api/domains</h3>
+<p><b>请求字段：</b>无。<b>响应字段：</b><code class="inline">domains:string[]</code>、<code class="inline">default_domains:string[]</code>、<code class="inline">prefix:string</code>、<code class="inline">min_address_len:number</code>、<code class="inline">max_address_len:number</code>。<b>注意：</b>无需登录，可用于客户端构造邮箱创建表单。</p>
+<h3>GET /api/address</h3>
+<p><b>请求头：</b><code class="inline">Authorization: Bearer &lt;AddressJWT&gt;</code> 或 API Key 配合 <code class="inline">x-address</code>。<b>响应字段：</b><code class="inline">id</code>、<code class="inline">address</code>、<code class="inline">created_at</code>、<code class="inline">updated_at</code>、<code class="inline">mail_count</code>、<code class="inline">unread_count</code>。<b>注意：</b>只返回当前凭据对应邮箱。</p>
+<h3>GET/PATCH /user_api/profile</h3>
+<p><b>请求头：</b><code class="inline">x-user-token</code>。GET 无请求字段，响应包含 <code class="inline">id</code>、<code class="inline">email</code>、<code class="inline">username</code>、<code class="inline">role</code>、<code class="inline">limits</code>。PATCH 可传 <code class="inline">username</code>、客户端 SHA-256 <code class="inline">password</code> 和可选 <code class="inline">password_plain</code>；成功响应为 <code class="inline">{"success":true}</code>。</p>
+<h3>GET/PATCH /admin/users/:id</h3>
+<p><b>请求头：</b><code class="inline">x-admin-auth</code>。GET 返回用户、配额和密码（admin 的 password 固定为 null）。PATCH 可传 <code class="inline">username</code>、<code class="inline">password</code>、<code class="inline">password_plain</code> 与 <code class="inline">limits</code>（含邮箱/邮件总量、月度额度、<code class="inline">can_send_mail</code>）。<b>注意：</b>admin 不允许删除，密码仅在管理员界面展示给非管理员账户。</p>
 
 <h2 id="err">错误与注意事项</h2>
 <table><tr><th>错误</th><th>含义</th></tr>
@@ -175,7 +205,7 @@ code.inline{background:var(--card);padding:2px 6px;border-radius:4px;font-size:1
 <tr><td>429 Rate limit exceeded</td><td>触发限流，请退避</td></tr>
 <tr><td>403 Access blocked</td><td>命中 IP 黑名单/白名单</td></tr>
 </table>
-<p class="note" style="margin-top:24px">本页为静态说明；接口以实际部署为准。若部署开启了 Turnstile，<code class="inline">/api/new_address</code> 等需额外携带 <code class="inline">cf_token</code>。</p>
+<p class="note" style="margin-top:24px">本页为静态说明；接口以实际部署为准。地址创建不允许匿名调用；若部署开启了 Turnstile，<code class="inline">/api/new_address</code> 等需额外携带 <code class="inline">cf_token</code>。</p>
 </div></body></html>
 `
 
