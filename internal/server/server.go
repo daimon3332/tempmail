@@ -159,8 +159,8 @@ func (a *App) auth(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if len(a.cfg.Passwords) > 0 && !strings.HasPrefix(p, "/open_api") && !strings.HasPrefix(p, "/telegram/") {
-		if !contains(a.cfg.Passwords, r.Header.Get("x-custom-auth")) {
+	if len(a.sitePasswords(r.Context())) > 0 && !strings.HasPrefix(p, "/open_api") && !strings.HasPrefix(p, "/telegram/") {
+		if !contains(a.sitePasswords(r.Context()), r.Header.Get("x-custom-auth")) {
 			text(w, 401, "Need Custom Auth Password")
 			return
 		}
@@ -217,7 +217,7 @@ func (a *App) auth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) isAdmin(r *http.Request) bool {
-	if len(a.cfg.AdminPasswords) > 0 && contains(a.cfg.AdminPasswords, r.Header.Get("x-admin-auth")) {
+	if len(a.adminPasswords(r.Context())) > 0 && contains(a.adminPasswords(r.Context()), r.Header.Get("x-admin-auth")) {
 		return true
 	}
 	if a.cfg.AdminUserRole != "" {

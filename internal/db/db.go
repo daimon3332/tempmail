@@ -122,6 +122,16 @@ CREATE TABLE IF NOT EXISTS user_passkeys (
 CREATE INDEX IF NOT EXISTS idx_user_passkeys_user_id ON user_passkeys(user_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_user_passkeys_user_id_passkey_id ON user_passkeys(user_id, passkey_id);
 
+CREATE TABLE IF NOT EXISTS operation_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    time DATETIME DEFAULT CURRENT_TIMESTAMP,
+    actor TEXT,
+    action TEXT,
+    target TEXT,
+    result TEXT,
+    detail TEXT
+);
+
 CREATE TABLE IF NOT EXISTS role_configs (
     role TEXT PRIMARY KEY,
     name TEXT,
@@ -227,5 +237,17 @@ func (d *DB) SaveSetting(ctx context.Context, key, value string) error {
 
 func (d *DB) DeleteSetting(ctx context.Context, key string) error {
 	_, err := d.ExecContext(ctx, `DELETE FROM settings WHERE key = ?`, key)
+	return err
+}
+
+// BackupTo performs a consistent online backup of the SQLite database to path.
+func (d *DB) BackupTo(path string) error {
+	dest, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		return err
+	}
+	defer dest.Close()
+	// modernc sqlite online backup via VACUUM INTO is the simplest consistent copy.
+	_, err = d.ExecContext(context.Background(), "VACUUM INTO ?", path)
 	return err
 }

@@ -10,6 +10,8 @@ import (
 func (a *App) routes() {
 	m := a.mux
 	m.HandleFunc("GET /health_check", a.healthCheck)
+	m.HandleFunc("GET /events", a.sseHandler)
+	m.HandleFunc("GET /docs/api", a.apiDocs)
 	m.HandleFunc("GET /open_api/settings", a.openSettings)
 	m.HandleFunc("POST /open_api/site_login", a.siteLogin)
 	m.HandleFunc("POST /open_api/admin_login", a.adminLogin)
@@ -60,38 +62,39 @@ func (a *App) healthCheck(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) openSettings(w http.ResponseWriter, r *http.Request) {
-	needAuth := len(a.cfg.Passwords) > 0 && !contains(a.cfg.Passwords, r.Header.Get("x-custom-auth"))
+	rc := a.effective(r.Context())
+	needAuth := a.needAuth(r)
 	jsonResp(w, 200, map[string]any{
-		"title":                           a.cfg.Title,
-		"announcement":                    a.cfg.Announcement,
+		"title":                           rc.Title,
+		"announcement":                    rc.Announcement,
 		"alwaysShowAnnouncement":          false,
-		"prefix":                          a.cfg.Prefix,
-		"addressRegex":                    a.cfg.AddressRegex,
-		"minAddressLen":                   a.cfg.MinAddressLen,
-		"maxAddressLen":                   a.cfg.MaxAddressLen,
+		"prefix":                          rc.Prefix,
+		"addressRegex":                    rc.AddressRegex,
+		"minAddressLen":                   rc.MinAddressLen,
+		"maxAddressLen":                   rc.MaxAddressLen,
 		"defaultDomains":                  a.cfg.DefaultDomains,
 		"domains":                         a.cfg.Domains,
-		"randomSubdomainDomains":          a.cfg.RandomSubdomainDomains,
+		"randomSubdomainDomains":          rc.RandomSubdomainDomains,
 		"domainLabels":                    orEmpty(a.cfg.DomainLabels),
 		"needAuth":                        needAuth,
-		"adminContact":                    a.cfg.AdminContact,
-		"enableUserCreateEmail":           a.cfg.EnableUserCreateEmail,
-		"disableAnonymousUserCreateEmail": a.cfg.DisableAnonymousUserCreateEmail,
-		"disableCustomAddressName":        a.cfg.DisableCustomAddressName,
-		"enableUserDeleteEmail":           a.cfg.EnableUserDeleteEmail,
-		"enableMailReadStatus":            a.cfg.EnableMailReadStatus,
-		"enableAutoReply":                 a.cfg.EnableAutoReply,
+		"adminContact":                    rc.AdminContact,
+		"enableUserCreateEmail":           rc.EnableUserCreateEmail,
+		"disableAnonymousUserCreateEmail": rc.DisableAnonymousUserCreateEmail,
+		"disableCustomAddressName":        rc.DisableCustomAddressName,
+		"enableUserDeleteEmail":           rc.EnableUserDeleteEmail,
+		"enableMailReadStatus":            rc.EnableMailReadStatus,
+		"enableAutoReply":                 rc.EnableAutoReply,
 		"enableIndexAbout":                a.cfg.EnableIndexAbout,
-		"copyright":                       a.cfg.Copyright,
+		"copyright":                       rc.Copyright,
 		"cfTurnstileSiteKey":              a.cfg.TurnstileSiteKey,
-		"enableWebhook":                   a.cfg.EnableWebhook,
+		"enableWebhook":                   rc.EnableWebhook,
 		"isS3Enabled":                     a.cfg.S3Enabled(),
 		"enableSendMail":                  true,
 		"version":                         "v1.12.0",
 		"showGithub":                      !a.cfg.DisableShowGithub,
 		"showGithubForUser":               !a.cfg.DisableShowGithub,
 		"disableAdminPasswordCheck":       a.cfg.DisableAdminPasswordCheck,
-		"enableAddressPassword":           a.cfg.EnableAddressPassword,
+		"enableAddressPassword":           rc.EnableAddressPassword,
 		"enableAgentEmailInfo":            false,
 		"smtpImapProxyConfig": map[string]any{
 			"smtp": map[string]any{"host": "", "port": 8025, "starttls": false},
@@ -130,7 +133,7 @@ func (a *App) siteLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if !hashedContains(a.cfg.Passwords, req.Password) {
+	if !hashedContains(a.sitePasswords(r.Context()), req.Password) {
 		text(w, 401, "Need Custom Auth Password")
 		return
 	}
@@ -149,7 +152,7 @@ func (a *App) adminLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if !hashedContains(a.cfg.AdminPasswords, req.Password) {
+	if !hashedContains(a.adminPasswords(r.Context()), req.Password) {
 		text(w, 401, "Need admin password")
 		return
 	}
@@ -340,12 +343,13 @@ func (a *App) apiSettings(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) apiNewAddress(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
+	rc := a.effective(ctx)
 	user := userOf(r)
-	if a.cfg.DisableAnonymousUserCreateEmail && user == nil {
+	if rc.DisableAnonymousUserCreateEmail && user == nil {
 		text(w, 403, "Anonymous user create email is disabled")
 		return
 	}
-	if !a.cfg.EnableUserCreateEmail {
+	if !rc.EnableUserCreateEmail {
 		text(w, 403, "New address is disabled")
 		return
 	}
@@ -368,14 +372,14 @@ func (a *App) apiNewAddress(w http.ResponseWriter, r *http.Request) {
 				req.Name = ""
 			}
 		}
-		if a.cfg.DisableAnonymousUserCreateEmail || roleName != "" {
+		if rc.DisableAnonymousUserCreateEmail || roleName != "" {
 			if reached, msg := a.roles.LimitReached(ctx, claimInt(user, "user_id"), roleName); reached {
 				text(w, 400, msg)
 				return
 			}
 		}
 	}
-	if req.Name == "" || a.cfg.DisableCustomAddressName {
+	if req.Name == "" || rc.DisableCustomAddressName {
 		req.Name = a.generateRandomName()
 	}
 	res, err := a.newAddress(ctx, newAddressOpts{
@@ -389,7 +393,7 @@ func (a *App) apiNewAddress(w http.ResponseWriter, r *http.Request) {
 		text(w, 400, "Failed to create address: "+err.Error())
 		return
 	}
-	if user != nil && a.cfg.DisableAnonymousUserCreateEmail {
+	if user != nil && rc.DisableAnonymousUserCreateEmail {
 		a.db.Exec(ctx, `INSERT OR IGNORE INTO users_address (user_id, address_id) VALUES (?, ?)`, claimInt(user, "user_id"), res.AddressID)
 	}
 	jsonResp(w, 200, res)

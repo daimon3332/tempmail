@@ -177,3 +177,21 @@ func (a *App) rateLimitedPath(p string) bool {
 	}
 	return false
 }
+
+// tcpOpen reports whether a TCP endpoint accepts connections. addr may be
+// ":8080" (loopback prefixed) or "host:port".
+func (a *App) tcpOpen(ctx context.Context, addr string) bool {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return false
+	}
+	if strings.HasPrefix(addr, ":") {
+		addr = "127.0.0.1" + addr
+	}
+	conn, err := (&net.Dialer{Timeout: 2 * time.Second}).DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
+}

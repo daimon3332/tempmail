@@ -144,6 +144,7 @@ func (a *App) aiExtract(ctx context.Context, m *mailparse.Mail) *ExtractResult {
 // OnMailStored runs post-storage processing: AI extraction, Telegram push,
 // webhooks. Invoked asynchronously by the inbound pipeline.
 func (a *App) OnMailStored(ctx context.Context, address string, mailID int64, raw string, parsed *mailparse.Mail) {
+	a.notifyMailPublished(address, mailID)
 	var metadata string
 	s := a.aiSettings(ctx)
 	if s.Enabled && (!s.EnableAllowList || contains(s.AllowList, address)) {

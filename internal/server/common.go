@@ -34,7 +34,8 @@ func randomString(n int, charset string) string {
 }
 
 func (a *App) generateRandomName() string {
-	min, max := a.cfg.MinAddressLen, a.cfg.MaxAddressLen
+	rc := a.effective(context.Background())
+	min, max := rc.MinAddressLen, rc.MaxAddressLen
 	if min < 1 {
 		min = 1
 	}
@@ -170,10 +171,11 @@ type newAddressResult struct {
 }
 
 func (a *App) newAddress(ctx context.Context, o newAddressOpts) (*newAddressResult, error) {
+	rc := a.effective(ctx)
 	name := strings.TrimSpace(o.name)
 	nameRe := defaultNameRegex
-	if a.cfg.AddressRegex != "" {
-		if re, err := regexp.Compile(a.cfg.AddressRegex); err == nil {
+	if rc.AddressRegex != "" {
+		if re, err := regexp.Compile(rc.AddressRegex); err == nil {
 			nameRe = re
 		}
 	}
@@ -186,15 +188,15 @@ func (a *App) newAddress(ctx context.Context, o newAddressOpts) (*newAddressResu
 				return nil, fmt.Errorf("Name[%s]is blocked", name)
 			}
 		}
-		if a.cfg.AddressCheckRegex != "" {
-			if re, err := regexp.Compile(a.cfg.AddressCheckRegex); err == nil && !re.MatchString(name) {
-				return nil, fmt.Errorf("Name not match regex: /%s/", a.cfg.AddressCheckRegex)
+		if rc.AddressCheckRegex != "" {
+			if re, err := regexp.Compile(rc.AddressCheckRegex); err == nil && !re.MatchString(name) {
+				return nil, fmt.Errorf("Name not match regex: /%s/", rc.AddressCheckRegex)
 			}
 		}
 	}
 	minLen, maxLen := 1, 30
 	if o.checkLengthByConfig {
-		minLen, maxLen = a.cfg.MinAddressLen, a.cfg.MaxAddressLen
+		minLen, maxLen = rc.MinAddressLen, rc.MaxAddressLen
 	}
 	if minLen < 1 {
 		minLen = 1
@@ -211,7 +213,7 @@ func (a *App) newAddress(ctx context.Context, o newAddressOpts) (*newAddressResu
 	if o.addressPrefix != nil {
 		name = strings.ToLower(strings.TrimSpace(*o.addressPrefix)) + name
 	} else if o.enablePrefix {
-		name = a.cfg.Prefix + name
+		name = rc.Prefix + name
 	}
 	allow := o.allowDomains
 	if len(allow) == 0 {
@@ -364,9 +366,10 @@ func (a *App) parseRawFromRow(row db.Row) *mailparse.Mail {
 }
 
 func (a *App) userRolePrefix(ctx context.Context, r *http.Request) *string {
+	rc := a.effective(ctx)
 	u := userOf(r)
 	if u == nil {
-		p := a.cfg.Prefix
+		p := rc.Prefix
 		return &p
 	}
 	role, _ := a.roles.UserRole(ctx, claimInt(u, "user_id"))
@@ -374,7 +377,7 @@ func (a *App) userRolePrefix(ctx context.Context, r *http.Request) *string {
 		p := strings.ToLower(strings.TrimSpace(*role.Prefix))
 		return &p
 	}
-	p := a.cfg.Prefix
+	p := rc.Prefix
 	return &p
 }
 
