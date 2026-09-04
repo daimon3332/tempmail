@@ -10,9 +10,10 @@ import (
 )
 
 // Mode controls how a wrangler `d1 export` dump is applied.
-//   Primary: ids are preserved (first import into an empty database).
-//   Merge:   ids are dropped and reassigned; users/address foreign keys are
-//            remapped so a second database can be folded in.
+//
+//	Primary: ids are preserved (first import into an empty database).
+//	Merge:   ids are dropped and reassigned; users/address foreign keys are
+//	         remapped so a second database can be folded in.
 type Mode int
 
 const (

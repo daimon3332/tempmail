@@ -449,7 +449,7 @@ func sendWebhook(s webhookSettings, values map[string]any) error {
 	return nil
 }
 
-func (a *App) webhookValues(id any, from, to string, raw string, parsed *mailparse.Mail) map[string]any {
+func (a *App) webhookValues(id any, from, to string, raw string, parsed *mailparse.Mail, ai *ExtractResult) map[string]any {
 	url := ""
 	if a.cfg.FrontendURL != "" {
 		url = fmt.Sprintf("%s?mail_id=%v", a.cfg.FrontendURL, id)
@@ -466,11 +466,14 @@ func (a *App) webhookValues(id any, from, to string, raw string, parsed *mailpar
 			v["from"] = parsed.Sender
 		}
 	}
+	if ai != nil {
+		v["aiExtract"], v["aiExtractType"], v["aiExtractResult"], v["aiExtractResultText"] = ai, ai.Type, ai.Result, ai.ResultText
+	}
 	return v
 }
 
 // TriggerWebhook is invoked by the inbound SMTP pipeline after a mail is stored.
-func (a *App) TriggerWebhook(ctx context.Context, address string, mailID int64, raw string, parsed *mailparse.Mail) {
+func (a *App) TriggerWebhook(ctx context.Context, address string, mailID int64, raw string, parsed *mailparse.Mail, metadata string) {
 	if !a.cfg.EnableWebhook {
 		return
 	}
@@ -492,7 +495,7 @@ func (a *App) TriggerWebhook(ctx context.Context, address string, mailID int64, 
 		from = parsed.Sender
 	}
 	for _, h := range hooks {
-		if err := sendWebhook(h, a.webhookValues(mailID, from, address, raw, parsed)); err != nil {
+		if err := sendWebhook(h, a.webhookValues(mailID, from, address, raw, parsed, aiFromMetadata(metadata))); err != nil {
 			fmt.Println("webhook:", err)
 		}
 	}

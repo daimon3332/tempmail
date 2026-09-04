@@ -39,11 +39,15 @@ func (a *App) routes() {
 	m.HandleFunc("POST /external/api/send_mail", a.externalSendMail)
 	m.HandleFunc("GET /api/sendbox", a.apiSendbox)
 	m.HandleFunc("DELETE /api/sendbox/{id}", a.apiDeleteSendbox)
-	m.HandleFunc("GET /api/attachment/list", func(w http.ResponseWriter, r *http.Request) { text(w, 400, "S3 is not enabled") })
+	m.HandleFunc("GET /api/attachment/list", a.apiAttachmentList)
+	m.HandleFunc("POST /api/attachment/delete", a.apiAttachmentDelete)
+	m.HandleFunc("POST /api/attachment/put_url", a.apiAttachmentPutURL)
+	m.HandleFunc("POST /api/attachment/get_url", a.apiAttachmentGetURL)
 
 	a.userRoutes()
 	a.adminRoutes()
 	a.extRoutes()
+	a.telegramRoutes()
 	m.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { text(w, 404, "Not Found") })
 }
 
@@ -79,9 +83,9 @@ func (a *App) openSettings(w http.ResponseWriter, r *http.Request) {
 		"enableAutoReply":                 a.cfg.EnableAutoReply,
 		"enableIndexAbout":                a.cfg.EnableIndexAbout,
 		"copyright":                       a.cfg.Copyright,
-		"cfTurnstileSiteKey":              "",
+		"cfTurnstileSiteKey":              a.cfg.TurnstileSiteKey,
 		"enableWebhook":                   a.cfg.EnableWebhook,
-		"isS3Enabled":                     false,
+		"isS3Enabled":                     a.cfg.S3Enabled(),
 		"enableSendMail":                  true,
 		"version":                         "v1.12.0",
 		"showGithub":                      !a.cfg.DisableShowGithub,
@@ -94,7 +98,7 @@ func (a *App) openSettings(w http.ResponseWriter, r *http.Request) {
 			"imap": map[string]any{"host": "", "port": 11143, "starttls": false},
 		},
 		"statusUrl":                  "",
-		"enableGlobalTurnstileCheck": false,
+		"enableGlobalTurnstileCheck": a.cfg.GlobalTurnstile(),
 	})
 }
 
@@ -117,8 +121,15 @@ func hashedContains(list []string, hashed string) bool {
 func (a *App) siteLogin(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Password string `json:"password"`
+		CfToken  string `json:"cf_token"`
 	}
 	readJSON(r, &req)
+	if a.cfg.GlobalTurnstile() {
+		if err := a.checkTurnstile(r.Context(), req.CfToken); err != nil {
+			text(w, 400, "Captcha verification failed")
+			return
+		}
+	}
 	if !hashedContains(a.cfg.Passwords, req.Password) {
 		text(w, 401, "Need Custom Auth Password")
 		return
@@ -129,8 +140,15 @@ func (a *App) siteLogin(w http.ResponseWriter, r *http.Request) {
 func (a *App) adminLogin(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Password string `json:"password"`
+		CfToken  string `json:"cf_token"`
 	}
 	readJSON(r, &req)
+	if a.cfg.GlobalTurnstile() {
+		if err := a.checkTurnstile(r.Context(), req.CfToken); err != nil {
+			text(w, 400, "Captcha verification failed")
+			return
+		}
+	}
 	if !hashedContains(a.cfg.AdminPasswords, req.Password) {
 		text(w, 401, "Need admin password")
 		return
@@ -335,8 +353,13 @@ func (a *App) apiNewAddress(w http.ResponseWriter, r *http.Request) {
 		Name                  string `json:"name"`
 		Domain                string `json:"domain"`
 		EnableRandomSubdomain any    `json:"enableRandomSubdomain"`
+		CfToken               string `json:"cf_token"`
 	}
 	readJSON(r, &req)
+	if err := a.checkTurnstile(ctx, req.CfToken); err != nil {
+		text(w, 400, "Captcha verification failed")
+		return
+	}
 	roleName := ""
 	if user != nil {
 		if role, _ := a.roles.UserRole(ctx, claimInt(user, "user_id")); role != nil {
@@ -609,7 +632,7 @@ func (a *App) apiTestWebhook(w http.ResponseWriter, r *http.Request) {
 		resolveRaw(row)
 		id, raw = row["id"], row.Str("raw")
 	}
-	vals := a.webhookValues(id, "test@test.com", address, raw, a.parseRawFromRow(row))
+	vals := a.webhookValues(id, "test@test.com", address, raw, a.parseRawFromRow(row), nil)
 	if vals["subject"] == "" {
 		vals["subject"] = "test subject"
 	}

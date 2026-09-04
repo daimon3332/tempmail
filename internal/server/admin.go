@@ -80,8 +80,6 @@ func (a *App) adminRoutes() {
 	m.HandleFunc("POST /admin/ip_blacklist/settings", a.adminSaveIPBlacklist)
 	m.HandleFunc("GET /admin/ai_extract/settings", a.adminGetAIExtract)
 	m.HandleFunc("POST /admin/ai_extract/settings", a.adminSaveAIExtract)
-	m.HandleFunc("GET /admin/telegram/settings", func(w http.ResponseWriter, r *http.Request) { text(w, 400, "Telegram is not supported") })
-	m.HandleFunc("GET /admin/telegram/status", func(w http.ResponseWriter, r *http.Request) { text(w, 400, "Telegram is not supported") })
 }
 
 func mailerBuild(fromName, from, to, subject, content string) []byte {
@@ -711,7 +709,7 @@ func (a *App) adminTestMailWebhook(w http.ResponseWriter, r *http.Request) {
 		resolveRaw(row)
 		id, raw = row["id"], row.Str("raw")
 	}
-	vals := a.webhookValues(id, "test@test.com", "admin@test.com", raw, a.parseRawFromRow(row))
+	vals := a.webhookValues(id, "test@test.com", "admin@test.com", raw, a.parseRawFromRow(row), nil)
 	if vals["subject"] == "" {
 		vals["subject"] = "test subject"
 	}
@@ -740,7 +738,7 @@ func (a *App) adminWorkerConfig(w http.ResponseWriter, r *http.Request) {
 		"ENABLE_USER_CREATE_EMAIL": a.cfg.EnableUserCreateEmail, "DISABLE_ANONYMOUS_USER_CREATE_EMAIL": a.cfg.DisableAnonymousUserCreateEmail,
 		"ENABLE_USER_DELETE_EMAIL": a.cfg.EnableUserDeleteEmail, "ENABLE_MAIL_READ_STATUS": a.cfg.EnableMailReadStatus,
 		"ENABLE_AUTO_REPLY": a.cfg.EnableAutoReply, "COPYRIGHT": a.cfg.Copyright, "ENABLE_WEBHOOK": a.cfg.EnableWebhook,
-		"S3_ENABLED": false, "VERSION": "v1.12.0", "DISABLE_SHOW_GITHUB": a.cfg.DisableShowGithub,
+		"S3_ENABLED": a.cfg.S3Enabled(), "VERSION": "v1.12.0", "DISABLE_SHOW_GITHUB": a.cfg.DisableShowGithub,
 		"DISABLE_SHOW_GITHUB_FOR_USER": a.cfg.DisableShowGithub, "DISABLE_ADMIN_PASSWORD_CHECK": a.cfg.DisableAdminPasswordCheck,
 		"ENABLE_CHECK_JUNK_MAIL": a.cfg.EnableCheckJunkMail, "JUNK_MAIL_CHECK_LIST": orEmpty(a.cfg.JunkMailCheckList),
 		"JUNK_MAIL_FORCE_PASS_LIST": []string{}, "REMOVE_EXCEED_SIZE_ATTACHMENT": false, "REMOVE_ALL_ATTACHMENT": false,

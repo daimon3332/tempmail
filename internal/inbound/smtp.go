@@ -21,7 +21,7 @@ import (
 // Hooks lets the HTTP layer react to stored mail (webhooks) without an
 // import cycle.
 type Hooks interface {
-	TriggerWebhook(ctx context.Context, address string, mailID int64, raw string, parsed *mailparse.Mail)
+	OnMailStored(ctx context.Context, address string, mailID int64, raw string, parsed *mailparse.Mail)
 }
 
 type Server struct {
@@ -224,7 +224,7 @@ func (s *Server) store(ctx context.Context, from, to, messageID string, raw []by
 		s.forward(from, to, raw)
 		s.autoReply(context.Background(), from, to, messageID)
 		if s.hooks != nil {
-			s.hooks.TriggerWebhook(context.Background(), to, id, string(raw), parsed)
+			s.hooks.OnMailStored(context.Background(), to, id, string(raw), parsed)
 		}
 	}()
 	return id, nil

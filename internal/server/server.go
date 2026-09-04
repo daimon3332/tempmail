@@ -16,7 +16,10 @@ import (
 	"tempmail/internal/config"
 	"tempmail/internal/db"
 	"tempmail/internal/mailer"
+	"tempmail/internal/passkey"
 	"tempmail/internal/roles"
+	"tempmail/internal/s3store"
+	"tempmail/internal/telegram"
 
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -30,6 +33,9 @@ type App struct {
 	static http.Handler
 	mux    *http.ServeMux
 	ingest IngestFunc
+	tg     *telegram.Bot
+	pass   *passkey.Store
+	s3     *s3store.Store
 }
 
 // IngestFunc stores a raw inbound message; wired to the SMTP pipeline.
@@ -47,14 +53,68 @@ const (
 
 var apiPrefixes = []string{"/api/", "/open_api/", "/user_api/", "/admin/", "/telegram/", "/external/"}
 
-func New(cfg *config.Config, d *db.DB, signer *auth.Signer, m *mailer.Mailer, rs *roles.Store, webFS fs.FS) *App {
+func New(ctx context.Context, cfg *config.Config, d *db.DB, signer *auth.Signer, m *mailer.Mailer, rs *roles.Store, webFS fs.FS) *App {
 	a := &App{cfg: cfg, db: d, jwt: signer, mailer: m, roles: rs, mux: http.NewServeMux()}
 	if webFS != nil {
 		a.static = spaHandler(webFS)
 	}
+	if cfg.TelegramBotToken != "" {
+		a.tg = telegram.New(cfg, d, signer, addressAdapter{a})
+	}
+	if s3s, err := s3store.New(ctx, cfg); err == nil {
+		a.s3 = s3s
+	}
+	if pk, err := passkey.New(a.rpID(), []string{a.origin()}, a.cfg.Title); err == nil {
+		a.pass = pk
+	}
 	a.routes()
 	return a
 }
+
+func (a *App) rpID() string {
+	if h := hostOnly(a.cfg.FrontendURL); h != "" {
+		return strings.TrimPrefix(h, "www.")
+	}
+	if len(a.cfg.Domains) > 0 {
+		return a.cfg.Domains[0]
+	}
+	return "localhost"
+}
+
+func (a *App) origin() string {
+	if a.cfg.FrontendURL != "" {
+		return strings.TrimRight(a.cfg.FrontendURL, "/")
+	}
+	return "http://localhost:8080"
+}
+
+func hostOnly(u string) string {
+	u = strings.TrimPrefix(strings.TrimPrefix(u, "https://"), "http://")
+	if i := strings.IndexAny(u, "/:"); i >= 0 {
+		u = u[:i]
+	}
+	return u
+}
+
+// Telegram returns the bot (nil when TELEGRAM_BOT_TOKEN is unset).
+func (a *App) Telegram() *telegram.Bot { return a.tg }
+
+type addressAdapter struct{ a *App }
+
+func (x addressAdapter) NewAddress(ctx context.Context, name, domain string, randomSub bool, sourceMeta string) (string, string, int64, *string, error) {
+	res, err := x.a.newAddress(ctx, newAddressOpts{name: name, domain: domain, enablePrefix: true, enableRandomSubdomain: randomSub,
+		checkLengthByConfig: true, allowDomains: x.a.cfg.Domains, enableCheckNameRegex: true, sourceMeta: sourceMeta})
+	if err != nil {
+		return "", "", 0, nil, err
+	}
+	return res.Address, res.JWT, res.AddressID, res.Password, nil
+}
+
+func (x addressAdapter) DeleteAddress(ctx context.Context, id int64) error {
+	return x.a.deleteAddressesWhere(ctx, `id = ?`, id)
+}
+
+func (x addressAdapter) RandomName() string { return x.a.generateRandomName() }
 
 func (a *App) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -87,6 +147,18 @@ func (a *App) Handler() http.Handler {
 
 func (a *App) auth(w http.ResponseWriter, r *http.Request) {
 	p := r.URL.Path
+	if code, block := a.ipBlacklistApply(r); block {
+		w.Header().Set("Retry-After", "60")
+		text(w, code, "Access blocked")
+		return
+	}
+	if a.rateLimitedPath(p) {
+		if !a.rateLimit(p, clientIP(r, a.cfg.TrustedProxies)) {
+			w.Header().Set("Retry-After", "60")
+			text(w, 429, "Rate limit exceeded")
+			return
+		}
+	}
 	if len(a.cfg.Passwords) > 0 && !strings.HasPrefix(p, "/open_api") && !strings.HasPrefix(p, "/telegram/") {
 		if !contains(a.cfg.Passwords, r.Header.Get("x-custom-auth")) {
 			text(w, 401, "Need Custom Auth Password")

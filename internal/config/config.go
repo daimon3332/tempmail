@@ -82,6 +82,28 @@ type Config struct {
 	TrustedProxies []string
 	IngestToken    string
 	OriginToken    string
+
+	TelegramBotToken       string
+	TGMaxAddress           int
+	TGAllowUserLang        bool
+	EnableTGPushAttachment bool
+	TGPolling              bool
+
+	S3Endpoint        string
+	S3AccessKeyID     string
+	S3SecretAccessKey string
+	S3Bucket          string
+	S3Region          string
+	S3URLExpires      int
+
+	TurnstileSiteKey      string
+	TurnstileSecretKey    string
+	EnableGlobalTurnstile bool
+
+	AIExtractEndpoint  string
+	AIExtractAPIKey    string
+	AIExtractModel     string
+	RateLimitPerMinute int
 }
 
 func env(key, def string) string {
@@ -196,6 +218,28 @@ func Load() *Config {
 		TrustedProxies:      envList("TRUSTED_PROXIES"),
 		IngestToken:         os.Getenv("INGEST_TOKEN"),
 		OriginToken:         os.Getenv("ORIGIN_TOKEN"),
+
+		TelegramBotToken:       os.Getenv("TELEGRAM_BOT_TOKEN"),
+		TGMaxAddress:           envInt("TG_MAX_ADDRESS", 5),
+		TGAllowUserLang:        envBool("TG_ALLOW_USER_LANG", false),
+		EnableTGPushAttachment: envBool("ENABLE_TG_PUSH_ATTACHMENT", false),
+		TGPolling:              envBool("TG_POLLING", false),
+
+		S3Endpoint:        os.Getenv("S3_ENDPOINT"),
+		S3AccessKeyID:     os.Getenv("S3_ACCESS_KEY_ID"),
+		S3SecretAccessKey: os.Getenv("S3_SECRET_ACCESS_KEY"),
+		S3Bucket:          os.Getenv("S3_BUCKET"),
+		S3Region:          env("S3_REGION", "auto"),
+		S3URLExpires:      envInt("S3_URL_EXPIRES", 360),
+
+		TurnstileSiteKey:      os.Getenv("CF_TURNSTILE_SITE_KEY"),
+		TurnstileSecretKey:    os.Getenv("CF_TURNSTILE_SECRET_KEY"),
+		EnableGlobalTurnstile: envBool("ENABLE_GLOBAL_TURNSTILE_CHECK", false),
+
+		AIExtractEndpoint:  os.Getenv("AI_EXTRACT_ENDPOINT"),
+		AIExtractAPIKey:    os.Getenv("AI_EXTRACT_API_KEY"),
+		AIExtractModel:     env("AI_EXTRACT_MODEL", "gpt-4o-mini"),
+		RateLimitPerMinute: envInt("RATE_LIMIT_PER_MINUTE", 30),
 	}
 
 	if raw := os.Getenv("USER_ROLES"); raw != "" {
@@ -238,3 +282,13 @@ func (c *Config) RelayFor(domain string) *SMTPRelay {
 	}
 	return nil
 }
+
+func (c *Config) S3Enabled() bool {
+	return c.S3Endpoint != "" && c.S3AccessKeyID != "" && c.S3SecretAccessKey != "" && c.S3Bucket != ""
+}
+
+func (c *Config) TurnstileEnabled() bool {
+	return c.TurnstileSiteKey != "" && c.TurnstileSecretKey != ""
+}
+
+func (c *Config) GlobalTurnstile() bool { return c.EnableGlobalTurnstile && c.TurnstileEnabled() }

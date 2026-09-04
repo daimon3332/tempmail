@@ -55,7 +55,7 @@ func main() {
 			webFS = sub
 		}
 	}
-	app := server.New(cfg, database, signer, m, rs, webFS)
+	app := server.New(context.Background(), cfg, database, signer, m, rs, webFS)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

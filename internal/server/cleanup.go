@@ -60,6 +60,14 @@ func validateCustomSQL(s string) error {
 }
 
 func (a *App) deleteAddressesWhere(ctx context.Context, cond string, args ...any) error {
+	// Resolve the affected addresses first so Telegram bindings can be cleaned.
+	if rows, err := a.db.Query(ctx, `SELECT name FROM address WHERE `+cond, args...); err == nil {
+		for _, r := range rows {
+			if a.tg != nil {
+				a.tg.UnbindByAddress(ctx, r.Str("name"))
+			}
+		}
+	}
 	stmts := []string{
 		`DELETE FROM raw_mails WHERE address IN (SELECT name FROM address WHERE ` + cond + `)`,
 		`DELETE FROM sendbox WHERE address IN (SELECT name FROM address WHERE ` + cond + `)`,

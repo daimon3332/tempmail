@@ -34,8 +34,117 @@ func (a *App) userRoutes() {
 	m.HandleFunc("GET /user_api/bind_address_jwt/{address_id}", a.userBindedAddressJWT)
 	m.HandleFunc("POST /user_api/unbind_address", a.userUnbindAddress)
 	m.HandleFunc("POST /user_api/transfer_address", a.userTransferAddress)
-	m.HandleFunc("GET /user_api/passkey", func(w http.ResponseWriter, r *http.Request) { jsonResp(w, 200, map[string]any{"results": []any{}}) })
-	m.HandleFunc("/user_api/passkey/", func(w http.ResponseWriter, r *http.Request) { text(w, 400, "Passkey is not supported") })
+	m.HandleFunc("GET /user_api/passkey", a.passkeyList)
+	m.HandleFunc("POST /user_api/passkey/rename", a.passkeyRename)
+	m.HandleFunc("DELETE /user_api/passkey/{id}", a.passkeyDelete)
+	m.HandleFunc("POST /user_api/passkey/register_request", a.passkeyRegisterRequest)
+	m.HandleFunc("POST /user_api/passkey/register_response", a.passkeyRegisterResponse)
+	m.HandleFunc("POST /user_api/passkey/authenticate_request", a.passkeyAuthenticateRequest)
+	m.HandleFunc("POST /user_api/passkey/authenticate_response", a.passkeyAuthenticateResponse)
+}
+
+// ---- passkey ----
+
+func (a *App) passkeyList(w http.ResponseWriter, r *http.Request) {
+	if a.pass == nil {
+		jsonResp(w, 200, []any{})
+		return
+	}
+	u := userOf(r)
+	list, err := a.pass.List(r.Context(), claimInt(u, "user_id"))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	jsonResp(w, 200, list)
+}
+
+func (a *App) passkeyRename(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		PasskeyID   string `json:"passkey_id"`
+		PasskeyName string `json:"passkey_name"`
+	}
+	readJSON(r, &req)
+	u := userOf(r)
+	if err := a.pass.Rename(r.Context(), claimInt(u, "user_id"), req.PasskeyID, req.PasskeyName); err != nil {
+		text(w, 400, err.Error())
+		return
+	}
+	ok(w)
+}
+
+func (a *App) passkeyDelete(w http.ResponseWriter, r *http.Request) {
+	u := userOf(r)
+	if err := a.pass.Delete(r.Context(), claimInt(u, "user_id"), r.PathValue("id")); err != nil {
+		text(w, 500, "Operation failed")
+		return
+	}
+	ok(w)
+}
+
+func (a *App) passkeyRegisterRequest(w http.ResponseWriter, r *http.Request) {
+	u := userOf(r)
+	opts, err := a.pass.RegisterBegin(r.Context(), claimInt(u, "user_id"), claimStr(u, "user_email"))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	jsonResp(w, 200, opts)
+}
+
+func (a *App) passkeyRegisterResponse(w http.ResponseWriter, r *http.Request) {
+	body, err := readAllBody(r)
+	if err != nil {
+		text(w, 400, "Invalid input")
+		return
+	}
+	u := userOf(r)
+	var name struct {
+		PasskeyName string `json:"passkey_name"`
+	}
+	json.Unmarshal(body, &name)
+	if name.PasskeyName == "" {
+		name.PasskeyName = "Passkey"
+	}
+	if _, err := a.pass.RegisterFinish(r.Context(), claimInt(u, "user_id"), claimStr(u, "user_email"), name.PasskeyName, body); err != nil {
+		text(w, 400, "Registration failed: "+err.Error())
+		return
+	}
+	ok(w)
+}
+
+func (a *App) passkeyAuthenticateRequest(w http.ResponseWriter, r *http.Request) {
+	opts, err := a.pass.LoginBegin(r.Context())
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	jsonResp(w, 200, opts)
+}
+
+func (a *App) passkeyAuthenticateResponse(w http.ResponseWriter, r *http.Request) {
+	body, err := readAllBody(r)
+	if err != nil {
+		text(w, 400, "Invalid input")
+		return
+	}
+	userID, email, err := a.pass.LoginFinish(r.Context(), body)
+	if err != nil {
+		text(w, 400, "Authentication failed: "+err.Error())
+		return
+	}
+	token, _ := a.jwt.UserToken(email, userID)
+	jsonResp(w, 200, map[string]string{"jwt": token})
+}
+
+// readAllBody can only be used once per request; passkey responses carry the
+// credential as the whole JSON document.
+func readAllBody(r *http.Request) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 4<<20))
+	if err != nil {
+		return nil, err
+	}
+	return body, nil
 }
 
 type oauth2Setting struct {
@@ -221,10 +330,17 @@ func (a *App) checkUserEmail(ctx context.Context, email string) error {
 
 func (a *App) userVerifyCode(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Email string `json:"email"`
+		Email   string `json:"email"`
+		CfToken string `json:"cf_token"`
 	}
 	readJSON(r, &req)
 	ctx := r.Context()
+	if a.cfg.GlobalTurnstile() {
+		if err := a.checkTurnstile(ctx, req.CfToken); err != nil {
+			text(w, 400, "Captcha verification failed")
+			return
+		}
+	}
 	if err := a.checkUserEmail(ctx, req.Email); err != nil {
 		text(w, 400, err.Error())
 		return
@@ -295,8 +411,15 @@ func (a *App) userRegister(w http.ResponseWriter, r *http.Request) {
 		Email    string `json:"email"`
 		Password string `json:"password"`
 		Code     string `json:"code"`
+		CfToken  string `json:"cf_token"`
 	}
 	readJSON(r, &req)
+	if a.cfg.GlobalTurnstile() {
+		if err := a.checkTurnstile(ctx, req.CfToken); err != nil {
+			text(w, 400, "Captcha verification failed")
+			return
+		}
+	}
 	if req.Email == "" || req.Password == "" {
 		text(w, 400, "Invalid email or password")
 		return
@@ -351,8 +474,15 @@ func (a *App) userLogin(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Email    string `json:"email"`
 		Password string `json:"password"`
+		CfToken  string `json:"cf_token"`
 	}
 	readJSON(r, &req)
+	if a.cfg.GlobalTurnstile() {
+		if err := a.checkTurnstile(r.Context(), req.CfToken); err != nil {
+			text(w, 400, "Captcha verification failed")
+			return
+		}
+	}
 	if req.Email == "" || req.Password == "" {
 		text(w, 400, "Invalid email or password")
 		return
