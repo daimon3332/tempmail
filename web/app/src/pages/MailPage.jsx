@@ -23,7 +23,7 @@ export default function MailPage() {
     queryKey: ['mails', address, tab],
     enabled: !!address,
     // If we have no address JWT but an address is set, prompt login instead.
-    refetchInterval: tab === 'inbox' ? 8000 : false,
+    refetchInterval: tab === 'inbox' ? 60000 : false,
     queryFn: async () => {
       const path = tab === 'inbox' ? '/api/parsed_mails' : '/api/sendbox'
       const r = await api(`${path}?limit=50&offset=0`)
@@ -33,6 +33,13 @@ export default function MailPage() {
     },
   })
 
+  useEffect(() => {
+    if (!address || !state.addressJwt) return
+    const es = new EventSource(`/events?address=${encodeURIComponent(address)}`)
+    es.onmessage = () => { mailsQ.refetch() }
+    es.onerror = () => { es.close(); }
+    return () => es.close()
+  }, [address])
   useEffect(() => { setSelected(null); setSelectedBody(null) }, [address])
 
   const openMail = async (id) => {

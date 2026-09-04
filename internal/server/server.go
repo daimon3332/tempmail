@@ -137,7 +137,7 @@ func (a *App) Handler() http.Handler {
 				break
 			}
 		}
-		if !isAPI && a.static != nil && p != "/health_check" && p != "/health" {
+		if !isAPI && a.static != nil && p != "/health_check" && p != "/health" && p != "/docs/api" {
 			a.static.ServeHTTP(w, r)
 			return
 		}
