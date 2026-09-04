@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build and start the local Docker Compose deployment.
+# Pull and start the published Docker Compose deployment.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -17,8 +17,8 @@ mkdir -p data backups
 echo "== validate compose"
 docker compose config >/dev/null
 
-echo "== build"
-docker compose build --build-arg VERSION="$(date +%Y%m%d-%H%M)"
+echo "== pull image"
+docker compose pull
 
 if [ ! -f data/tempmail.db ] && [ -f backups/d1/cf-mail.sql ]; then
   echo "== first run: import D1 dump"

@@ -66,14 +66,17 @@ via a Cloudflare worker that forwards to the same origin.
 ## Run
 
 ```bash
-bash deploy.sh         # creates .env from .env.example when missing, then uses docker compose
-# edit .env before exposing the service; existing .env is never overwritten
+cp .env.example .env  # edit DOMAINS, ADMIN_PASSWORDS, JWT_SECRET and other settings
+docker compose pull   # pulls ghcr.io/daimon3332/tempmail:latest
+docker compose up -d
 ```
 
-The deployment is local and does not require an SSH server or a server address. `deploy.sh` validates the
-Compose file, builds the image, optionally imports SQL files found in `backups/d1/`, starts the container, and
-checks `/health`. To operate Compose manually, create `.env` once with `cp .env.example .env`, then run
-`docker compose up -d --build`.
+The root [`docker-compose.yml`](docker-compose.yml) is a complete example. Edit its image tag, ports, volumes,
+and environment file as needed, then run `docker compose pull && docker compose up -d`. The published image is
+available at `ghcr.io/daimon3332/tempmail`; the package must be marked **Public** in the GitHub package settings
+before anonymous users can pull it. If `.env` is missing, use the optional `bash deploy.sh` helper: it creates
+`.env` from `.env.example` without overwriting an existing file, pulls the image, starts Compose, and checks
+`/health`.
 
 Import an existing D1 database (once):
 
@@ -83,7 +86,8 @@ docker compose run --rm --no-deps tempmail -import /backups/d1/main.sql         
 docker compose run --rm --no-deps tempmail -import /backups/d1/other.sql -merge  # fold in a second db
 ```
 
-`workers/deploy.sh` publishes the optional Cloudflare workers separately.
+`workers/deploy.sh` publishes the optional Cloudflare workers separately. The container image is published by
+[`.github/workflows/publish-image.yml`](.github/workflows/publish-image.yml) on every `main` push and `v*` tag.
 
 ## Frontend
 
