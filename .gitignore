@@ -1,17 +1,34 @@
+# data / backups / secrets
 data/
 backups/
-reference/
-web/frontend/node_modules/
-web/dist/*
-!web/dist/.gitkeep
-*.exe
-*.log
 .env
-plan.md
-__pycache__/
-.wrangler/
+.env.local
 
-# frontend
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+bin/
+
+# frontend build output (embedded; web/app/src is tracked)
 web/app/node_modules/
 web/dist/*
 !web/dist/.gitkeep
+
+# Cloudflare wrangler
+.wrangler/
+
+# reference (read-only clone)
+reference/
+
+# misc
+*.log
+tmp/
+temp/
+.DS_Store
+.vscode/
+.idea/
