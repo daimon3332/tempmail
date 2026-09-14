@@ -82,7 +82,6 @@ type Config struct {
 
 	TrustedProxies []string
 	IngestToken    string
-	OriginToken    string
 
 	TelegramBotToken       string
 	TGMaxAddress           int
@@ -220,7 +219,6 @@ func Load() *Config {
 		EnableCheckJunkMail: envBool("ENABLE_CHECK_JUNK_MAIL", false),
 		TrustedProxies:      envList("TRUSTED_PROXIES"),
 		IngestToken:         os.Getenv("INGEST_TOKEN"),
-		OriginToken:         os.Getenv("ORIGIN_TOKEN"),
 
 		TelegramBotToken:       os.Getenv("TELEGRAM_BOT_TOKEN"),
 		TGMaxAddress:           envInt("TG_MAX_ADDRESS", 5),

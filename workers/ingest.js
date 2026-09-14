@@ -1,6 +1,5 @@
 // Email Routing target: forwards every inbound message to the self-hosted
-// backend. If the backend is unreachable the message is rejected with a
-// temporary failure so the sender retries.
+// backend. Delivery failures are surfaced to Cloudflare Email Routing.
 export default {
   async email(message, env) {
     const raw = new Uint8Array(await new Response(message.raw).arrayBuffer());
@@ -8,12 +7,11 @@ export default {
     for (let i = 0; i < raw.length; i += 0x8000) {
       bin += String.fromCharCode.apply(null, raw.subarray(i, i + 0x8000));
     }
-    const res = await fetch(env.ORIGIN_URL + "/external/ingest", {
+    const res = await fetch(env.ORIGIN_URL.replace(/\/+$/, "") + "/external/ingest", {
       method: "POST",
       headers: {
         "content-type": "application/json",
         "x-ingest-token": env.INGEST_TOKEN,
-        "x-origin-token": env.ORIGIN_TOKEN,
       },
       body: JSON.stringify({ from: message.from, to: message.to, raw_base64: btoa(bin) }),
     });

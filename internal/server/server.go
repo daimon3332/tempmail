@@ -139,10 +139,6 @@ func (a *App) Handler() http.Handler {
 			return
 		}
 		p := r.URL.Path
-		if a.cfg.OriginToken != "" && p != "/health" && p != "/health_check" && r.Header.Get("x-origin-token") != a.cfg.OriginToken {
-			text(w, 403, "Direct origin access is not allowed")
-			return
-		}
 		isAPI := false
 		for _, pre := range apiPrefixes {
 			if strings.HasPrefix(p, pre) {

@@ -142,12 +142,8 @@ func (a *App) effective(ctx context.Context) runtimeConfig {
 	if rc.MaxAddressLen != 0 {
 		base.MaxAddressLen = rc.MaxAddressLen
 	}
-	if rc.AddressRegex != "" {
-		base.AddressRegex = rc.AddressRegex
-	}
-	if rc.AddressCheckRegex != "" {
-		base.AddressCheckRegex = rc.AddressCheckRegex
-	}
+	base.AddressRegex = rc.AddressRegex
+	base.AddressCheckRegex = rc.AddressCheckRegex
 	if rc.RandomSubdomainDomainsSet || len(rc.RandomSubdomainDomains) > 0 {
 		base.RandomSubdomainDomains = rc.RandomSubdomainDomains
 	}

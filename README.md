@@ -28,7 +28,15 @@ Tempmail 是基于原版 `cloudflare_temp_email` 的自托管重构：保留原�
 
 ### 域名配置
 
-设置页提供“域名配置教程”链接，完整步骤见 [`web/app/public/docs/domain-setup.html`](web/app/public/docs/domain-setup.html)。添加域名后，HTTP 创建配置可立即读取；SMTP/MX 接收域名需要重启服务。
+已托管在 Cloudflare 的域名：部署 `tempmail-ingest`（配置网站地址 `ORIGIN_URL` 和收信令牌 `INGEST_TOKEN`），启用 Email Routing 并按提示配置 DNS，将“全收”指向 Worker，最后在“域名与新建邮箱”添加后缀并保存。无需网站代理、D1 或 KV。
+
+公开教程 `/docs/domain-setup.html` 提供代码复制和 `worker.js` 下载，下载内容由构建流程直接读取 `workers/ingest.js`。Worker 收信添加后缀无需重启；仅直连 SMTP 接收新域名需重新创建容器。
+
+### 高级配置
+
+域名、站点外观、API、AI、邮件规则使用各自的专用页面，不在高级配置中重复编辑。高级配置只列出支持的启动项，提供布尔下拉、整数范围和 SMTP JSON 校验；服务端也会拒绝非法值。路径、监听端口、JWT 和其他部署参数由服务器配置文件管理。
+
+保存会同步 `.env`，页面显示实际变更中需要重新加载的启动项。执行 `docker compose up -d --force-recreate` 加载新环境变量；`docker compose restart` 不会重新读取 `env_file`。`ORIGIN_TOKEN` 已移除，Worker 收信仍需 `INGEST_TOKEN`。
 
 ### Webhook
 
@@ -51,17 +59,16 @@ internal/telegram     Telegram bot + miniapp (initData auth) + mail push
 internal/server       HTTP router, guards (Turnstile/IP-blacklist/rate-limit), AI extract
 internal/importer     wrangler `d1 export` SQL -> SQLite (primary or merge mode)
 web/app               React+Vite+Tailwind frontend -> web/dist -> embedded in binary
-workers/              Cloudflare bridge: proxy.js (custom domain alias), ingest.js (Email Routing)
+workers/              Cloudflare Email Routing receiver (ingest.js)
 ```
 
 ## Mail flow
 
-1. Cloudflare Email Routing (all zones) -> worker `tempmail-ingest` -> `POST https://tempmail.333186.xyz/external/ingest`
+1. Cloudflare Email Routing -> worker `tempmail-ingest` -> `POST <ORIGIN_URL>/external/ingest`
 2. Direct SMTP on port 25 (point MX at the server to drop Cloudflare entirely)
 
-`https://tempmail.333186.xyz` is served by **nginx** (`/etc/nginx/sites-available/tempmail`) which reverse-proxies
-to `127.0.0.1:8080` (the Go binary). Port 8080 is loopback-only. `tempmail.daimon.dpdns.org` is kept as an alias
-via a Cloudflare worker that forwards to the same origin.
+Serve the website through an HTTPS reverse proxy to `127.0.0.1:8080` (the Go binary).
+No Cloudflare website proxy Worker is required.
 
 ## Run
 

@@ -1,10 +1,63 @@
 <!doctype html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>域名配置教程 - Tempmail</title><style>body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;line-height:1.7;max-width:860px;margin:0 auto;padding:32px 20px;color:#17202a}h1{font-size:28px}h2{margin-top:28px;font-size:20px}code{background:#f1f3f5;padding:2px 5px;border-radius:4px}li{margin:8px 0}.note{padding:12px 16px;background:#eef6ff;border-left:3px solid #2878d4;border-radius:4px}</style></head>
-<body><h1>Tempmail 域名配置</h1><p>本教程说明如何把自有域名添加到 Tempmail，并让邮箱可以接收邮件。</p>
-<h2>1. 在系统设置中添加</h2><ol><li>进入“系统设置 → 域名与新建邮箱”。</li><li>输入完整域名，例如 <code>mail.example.com</code>，点击“添加域名”。</li><li>勾选“默认”可作为未指定后缀时的默认域名；勾选“允许随机子域”后才能创建随机子域邮箱。</li><li>保存设置。HTTP 创建接口会立即读取新配置，SMTP 接收需要重启服务。</li></ol>
-<h2>2. 配置 DNS</h2><p>在域名 DNS 服务商处添加 MX 记录，将邮件投递到运行 Tempmail 的服务器。优先级通常设置为较低数值，例如：</p><ul><li>主机记录：<code>mail.example.com</code>（或你的收件子域）</li><li>记录类型：<code>MX</code></li><li>邮件服务器：指向服务器主机名，例如 <code>mx.example.com</code></li><li>同时为邮件服务器主机名配置 A/AAAA 记录</li></ul><p class="note">如果使用 Cloudflare Email Routing，请按 Cloudflare 控制台要求配置转发，并确保 Worker 的目标地址和 <code>INGEST_TOKEN</code> 正确。</p>
-<h2>3. 配置发信认证</h2><p>建议配置 SPF、DKIM 和 DMARC。它们能提高投递成功率，也会影响系统的垃圾邮件检查规则。</p>
-<h2>4. 重启并验证</h2><ol><li>重启 Tempmail 容器，使 SMTP 监听器加载新域名。</li><li>访问 <code>/open_api/domains</code>，确认域名出现在列表中。</li><li>创建一个测试邮箱，向该地址发送测试邮件。</li><li>在“邮箱与邮件”页面确认邮件进入收件箱。</li></ol>
-<h2>常见问题</h2><p><strong>可以创建但收不到邮件：</strong>通常是 MX 未生效、服务器 25 端口未放行，或服务重启前仍使用旧域名列表。</p><p><strong>随机子域创建失败：</strong>请先在域名列表勾选“允许随机子域”，并确认 DNS 通配符和 MX 策略覆盖该子域。</p>
-</body></html>
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>添加 Cloudflare 邮箱域名 - Tempmail</title><link rel="icon" href="/favicon.svg">
+<style>
+body{font-family:system-ui,sans-serif;line-height:1.75;max-width:780px;margin:auto;padding:24px 20px 48px;color:#17202a;background:#fff;overflow-wrap:anywhere}
+h1{font-size:26px}h2{font-size:20px;margin-top:30px}li{margin:8px 0}a{color:#155bbb}code{font-family:ui-monospace,monospace;background:#f1f3f5;padding:2px 4px}
+pre{overflow:auto;padding:16px;background:#f1f3f5;font-size:13px;line-height:1.6}pre code{padding:0}button,.download{display:inline-block;border:1px solid #aab4c0;border-radius:5px;background:#fff;color:#155bbb;padding:8px 14px;font:inherit;text-decoration:none;cursor:pointer}
+button:disabled{opacity:.5;cursor:default}:focus-visible{outline:2px solid #155bbb;outline-offset:3px}dt{font-weight:600}dd{margin:4px 0 14px}#status{font-size:14px}details{margin-top:12px}summary{cursor:pointer}
+</style>
+</head>
+<body>
+<a href="/">返回邮箱</a>
+<h1>添加 Cloudflare 邮箱域名</h1>
+<p>适用于已托管在 Cloudflare 的域名。邮件由 Cloudflare Worker 转发到你的 Tempmail 服务器，无需部署原版邮箱、网站代理或数据库。</p>
+<h2>1. 部署收信 Worker</h2>
+<ol>
+<li>在<strong>该域名所属的 Cloudflare 账号</strong>中打开“Workers 和 Pages”，创建 Worker，命名为 <code>tempmail-ingest</code>。同账号已有这个 Worker 时可以复用。</li>
+<li>点击“编辑代码”，用下方代码替换默认代码，部署。</li>
+<li>在 Worker 的“设置 → 变量和机密”中添加以下两项，保存并部署。</li>
+</ol>
+<dl>
+<dt><code>ORIGIN_URL</code>（文本）</dt>
+<dd>Tempmail 网站的 HTTPS 地址，例如 <code>https://mail.example.com</code>。不要追加 <code>/external/ingest</code>。</dd>
+<dt><code>INGEST_TOKEN</code>（Secret / 机密）</dt>
+<dd>与服务器“系统设置 → 环境变量与高级配置 → Worker 收信令牌”的值完全一致。已有令牌直接复用；首次设置或修改服务器令牌后，保存并在服务器运行 <code>docker compose up -d --force-recreate</code>。不要填写用户密码或 API Key。</dd>
+</dl>
+<a class="download" href="/docs/worker.js" download="worker.js">下载 worker.js</a>
+<button id="copy" type="button" disabled>复制代码</button>
+<p id="status" role="status">正在加载代码…</p>
+<details><summary>查看完整 Worker 代码</summary><pre><code id="source"></code></pre></details>
+<h2>2. 设置全收（Catch-all）</h2>
+<ol>
+<li>打开该域名的“电子邮件路由 / Email Routing”。首次启用时，按 Cloudflare 提示添加所需 DNS 记录；如果域名正在使用其他邮箱服务，不要覆盖它的 MX，改用独立子域。</li>
+<li>在“路由规则”找到<strong>全收</strong>，编辑为“<strong>发送到 Worker → tempmail-ingest</strong>”，保存并启用。</li>
+</ol>
+<p>不需要为每个邮箱单独建规则。已有单独规则会优先匹配，请确认它们也指向正确的 Worker。使用固定子域时，先在 Email Routing 的“设置 → 子域”启用该子域。</p>
+<h2>3. 在 Tempmail 添加后缀</h2>
+<ol>
+<li>打开“系统设置 → 域名与新建邮箱”，输入后缀，例如 <code>example.com</code>，点击“添加域名”，再点击页面顶部“保存”。</li>
+<li>先关闭“允许随机子域”：根域的全收规则不会自动接收任意随机子域的邮件。</li>
+<li>新建一个该后缀的邮箱，用外部邮箱发一封邮件，确认在网站中收到且正文、附件正常。仅添加后缀无需重启服务器。</li>
+</ol>
+<p>收不到邮件时，先查看 Cloudflare Email Routing 和 Worker 日志。<code>401</code> 通常表示收信令牌不匹配；未知邮箱被拒收时，先在网站创建该邮箱再发信。</p>
+<p><a href="https://developers.cloudflare.com/email-service/configuration/email-routing-addresses/" target="_blank" rel="noreferrer">Cloudflare 官方路由说明</a></p>
+<script>
+const copy = document.querySelector('#copy'), status = document.querySelector('#status');
+let source = '';
+fetch('/docs/worker.js').then(async response => {
+  if (!response.ok) throw new Error();
+  source = await response.text();
+  if (!source.includes('async email(')) throw new Error();
+  document.querySelector('#source').textContent = source;
+  copy.disabled = false; status.textContent = '代码不包含任何真实密钥，可直接部署。';
+}).catch(() => { status.textContent = '代码加载失败，请刷新重试，或使用下载链接。'; });
+copy.addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText(source); status.textContent = '已复制代码'; }
+  catch { document.querySelector('details').open = true; status.textContent = '浏览器未允许复制，请在下方手动选择代码。'; }
+});
+</script>
+</body>
+</html>

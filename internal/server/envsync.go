@@ -27,7 +27,16 @@ func readEnvValues(path string) map[string]string {
 			if key == "ADMIN_PASSWORDS" {
 				values[key] = ""
 			} else {
-				values[key] = strings.Trim(strings.TrimSpace(parts[1]), "\"")
+				value := strings.TrimSpace(parts[1])
+				if strings.HasPrefix(value, "\"") {
+					var decoded string
+					if json.Unmarshal([]byte(value), &decoded) == nil {
+						value = strings.ReplaceAll(decoded, "$$", "$")
+					}
+				} else if len(value) >= 2 && value[0] == '\'' && value[len(value)-1] == '\'' {
+					value = value[1 : len(value)-1]
+				}
+				values[key] = value
 			}
 		}
 	}
@@ -44,12 +53,23 @@ func syncRuntimeEnv(path string, rc runtimeConfig) error {
 	if err != nil {
 		return err
 	}
+	if err := validateEnvironment(rc.Environment); err != nil {
+		return err
+	}
 	values := map[string]string{}
-	for key, value := range rc.Environment {
-		if validEnvKey(key) {
-			values[key] = value
+	for _, field := range environmentFields {
+		if value, ok := rc.Environment[field.Key]; ok {
+			values[field.Key] = value
 		}
 	}
+	for key, value := range runtimeEnvValues(rc) {
+		values[key] = value
+	}
+	return writeEnvValues(path, b, values)
+}
+
+func runtimeEnvValues(rc runtimeConfig) map[string]string {
+	values := map[string]string{}
 	setList := func(key string, v []string) { raw, _ := json.Marshal(v); values[key] = string(raw) }
 	setList("DOMAINS", rc.Domains)
 	setList("DEFAULT_DOMAINS", rc.DefaultDomains)
@@ -79,19 +99,12 @@ func syncRuntimeEnv(path string, rc runtimeConfig) error {
 	values["AI_EXTRACT_MODEL"] = rc.AIModel
 	values["RATE_LIMIT_PER_MINUTE"] = fmt.Sprint(rc.RateLimitPerMinute)
 	values["API_KEY"] = rc.APIKey
-	return writeEnvValues(path, b, values)
-}
-
-func validEnvKey(key string) bool {
-	if key == "" {
-		return false
-	}
-	for _, r := range key {
-		if !(r == '_' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9') {
-			return false
-		}
-	}
-	return true
+	values["TITLE"] = rc.Title
+	values["ANNOUNCEMENT"] = rc.Announcement
+	values["COPYRIGHT"] = rc.Copyright
+	values["ADMIN_CONTACT"] = rc.AdminContact
+	values["DEFAULT_LANG"] = rc.DefaultLang
+	return values
 }
 
 func nonEmptyList(v string) []string {
@@ -113,6 +126,9 @@ func writeEnvValues(path string, original []byte, values map[string]string) erro
 			continue
 		}
 		key := strings.TrimSpace(strings.SplitN(line, "=", 2)[0])
+		if key == "ORIGIN_TOKEN" {
+			continue
+		}
 		if value, ok := values[key]; ok {
 			lines = append(lines, key+"="+envValue(value, key))
 			seen[key] = true
@@ -156,9 +172,11 @@ func writeEnvValues(path string, original []byte, values map[string]string) erro
 }
 
 func envValue(value, key string) string {
-	if strings.HasPrefix(value, "[") || value == "true" || value == "false" || key == "RATE_LIMIT_PER_MINUTE" || key == "MIN_ADDRESS_LEN" || key == "MAX_ADDRESS_LEN" || key == "RANDOM_SUBDOMAIN_LENGTH" {
-		return value
+	// Compose interpolates dollar signs in unquoted/double-quoted values.
+	// Literal quoting preserves secrets, JSON and regular expressions.
+	if !strings.ContainsAny(value, "'\r\n") {
+		return "'" + value + "'"
 	}
 	quoted, _ := json.Marshal(value)
-	return string(quoted)
+	return strings.ReplaceAll(string(quoted), "$", "$$")
 }

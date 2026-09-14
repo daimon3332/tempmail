@@ -9,3 +9,14 @@ web/dist
 *.log
 .env
 .claude
+tmp/
+temp/
+bin/
+web/app/node_modules/
+.wrangler/
+.env.*
+!.env.example
+AGENTS.md
+CLAUDE.md
+plan.md
+.deploy.tar.gz

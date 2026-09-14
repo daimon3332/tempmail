@@ -3,6 +3,8 @@ package server
 import (
 	"net/http"
 	"net/url"
+	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -10,11 +12,14 @@ import (
 // overrides) for the config page to populate.
 func (a *App) adminGetRuntimeConfig(w http.ResponseWriter, r *http.Request) {
 	rc := a.effective(r.Context())
-	rc.Environment = readEnvValues(a.cfg.EnvSyncPath)
+	rc.Environment = editableEnvironment(readEnvValues(a.cfg.EnvSyncPath))
 	// The admin-only settings surface may display site/API/AI secrets. The
 	// administrator password remains write-only by project policy.
 	rc.AdminPassword = ""
-	jsonResp(w, 200, rc)
+	jsonResp(w, 200, struct {
+		runtimeConfig
+		EnvironmentFields []environmentField `json:"environment_fields"`
+	}{rc, environmentFields})
 }
 
 // adminSaveRuntimeConfig persists runtime overrides; takes effect immediately.
@@ -57,6 +62,27 @@ func (a *App) adminSaveRuntimeConfig(w http.ResponseWriter, r *http.Request) {
 	if len(rc.DefaultDomains) == 0 {
 		rc.DefaultDomains = append([]string{}, rc.Domains...)
 	}
+	for _, domain := range rc.RandomSubdomainDomains {
+		if !seen[domain] {
+			text(w, 400, "随机子域后缀必须在域名列表中")
+			return
+		}
+	}
+	if rc.RandomSubdomainLength == 0 {
+		rc.RandomSubdomainLength = 8
+	}
+	if rc.RandomSubdomainLength < 1 || rc.RandomSubdomainLength > 63 {
+		text(w, 400, "随机子域长度必须为 1–63")
+		return
+	}
+	for _, pattern := range []string{rc.AddressRegex, rc.AddressCheckRegex} {
+		if pattern != "" {
+			if _, err := regexp.Compile(pattern); err != nil {
+				text(w, 400, "邮箱名正则表达式无效")
+				return
+			}
+		}
+	}
 	rc.RateLimitPerMinuteSet = true
 	if rc.AIEndpoint != "" {
 		u, err := url.Parse(rc.AIEndpoint)
@@ -72,8 +98,21 @@ func (a *App) adminSaveRuntimeConfig(w http.ResponseWriter, r *http.Request) {
 		rc.AIAllowList = []string{}
 	}
 	if rc.Environment == nil {
-		rc.Environment = readEnvValues(a.cfg.EnvSyncPath)
+		rc.Environment = editableEnvironment(readEnvValues(a.cfg.EnvSyncPath))
 	}
+	if err := validateEnvironment(rc.Environment); err != nil {
+		text(w, 400, err.Error())
+		return
+	}
+	before := readEnvValues(a.cfg.EnvSyncPath)
+	// Merge advanced fields so partial clients cannot clear unrelated secrets.
+	advanced := editableEnvironment(before)
+	for _, field := range environmentFields {
+		if value, ok := rc.Environment[field.Key]; ok {
+			advanced[field.Key] = value
+		}
+	}
+	rc.Environment = advanced
 	if rc.Prefix != "" {
 		rc.Prefix = strings.TrimSpace(rc.Prefix)
 	}
@@ -104,7 +143,16 @@ func (a *App) adminSaveRuntimeConfig(w http.ResponseWriter, r *http.Request) {
 	if err := syncRuntimeEnv(a.cfg.EnvSyncPath, rc); err != nil {
 		envStatus, envError = "pending", err.Error()
 	}
-	restartRequired := []string{"DOMAINS", "DEFAULT_DOMAINS", "RANDOM_SUBDOMAIN_DOMAINS", "SMTP_ADDR", "SMTP_CONFIG", "S3_ENDPOINT", "TELEGRAM_BOT_TOKEN", "JWT_SECRET"}
+	restartRequired := []string{}
+	for key, value := range rc.Environment {
+		if value != before[key] {
+			restartRequired = append(restartRequired, key)
+		}
+	}
+	if strings.Join(current.Domains, ",") != strings.Join(rc.Domains, ",") {
+		restartRequired = append(restartRequired, "DOMAINS（仅直连 SMTP 收信）")
+	}
+	sort.Strings(restartRequired)
 	jsonResp(w, 200, map[string]any{"success": true, "env_sync": envStatus, "env_error": envError, "restart_required": restartRequired})
 }
 

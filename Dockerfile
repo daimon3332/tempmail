@@ -6,6 +6,7 @@ RUN corepack enable && corepack prepare pnpm@10 --activate
 COPY web/app/package.json web/app/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY web/app/ ./
+COPY workers/ /workers/
 RUN VITE_OUT_DIR=/out pnpm build
 
 FROM golang:1.25-alpine AS backend
