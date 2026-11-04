@@ -56,7 +56,6 @@ func (a *App) hmeRoutes() {
 	m.HandleFunc("GET /admin/hme/aliases", a.hmeListAliases)
 	m.HandleFunc("POST /admin/hme/aliases", a.hmeCreateAlias)
 	m.HandleFunc("PATCH /admin/hme/aliases/{email}", a.hmeUpdateAlias)
-	m.HandleFunc("POST /admin/hme/aliases/{email}/link", a.hmeLinkAlias)
 	m.HandleFunc("POST /admin/hme/aliases/{email}/deactivate", a.hmeToggleAlias)
 	m.HandleFunc("POST /admin/hme/aliases/{email}/reactivate", a.hmeToggleAlias)
 	m.HandleFunc("DELETE /admin/hme/aliases/{email}", a.hmeDeleteAlias)
@@ -82,8 +81,8 @@ func firstHeader(m *mailparse.Mail, key string) string {
 
 // RouteHME accepts mail only when Cloudflare verified Apple's DKIM signature,
 // it reached an account's forward-to address, the header names that same
-// target, and the alias is a linked mailbox of that account; anything else
-// stays in the forward-to mailbox. Only the ingest path calls it, so mail
+// target, and the alias has a mailbox; anything else stays in the forward-to
+// mailbox. Only the ingest path calls it, so mail
 // injected straight into port 25 is never routed.
 func (a *App) RouteHME(ctx context.Context, to string, parsed *mailparse.Mail) (string, string, bool) {
 	if parsed == nil || !appleDKIMPass.MatchString(firstHeader(parsed, "Authentication-Results")) {
@@ -103,7 +102,7 @@ func (a *App) RouteHME(ctx context.Context, to string, parsed *mailparse.Mail) (
 	if n == 0 {
 		return "", "", false
 	}
-	_, _ = a.db.Exec(ctx, `UPDATE hme_aliases SET last_mail_at = datetime('now') WHERE email = ?`, h.Alias)
+	_, _ = a.db.Exec(ctx, `UPDATE hme_aliases SET last_mail_at = datetime('now'), pooled = 0 WHERE email = ?`, h.Alias)
 	return h.Alias, h.Sender, true
 }
 
@@ -207,7 +206,14 @@ const hmeUpsert = `INSERT INTO hme_aliases(email, account_id, anonymous_id, labe
 	ON CONFLICT(email) DO UPDATE SET account_id = excluded.account_id, anonymous_id = excluded.anonymous_id,
 	label = excluded.label, note = excluded.note, active = excluded.active, apple_created_at = excluded.apple_created_at`
 
-// hmeStoreAliases mirrors Apple's list for one account (pool flags survive).
+// hmeLinkAll gives every known alias a mailbox so it receives mail as soon as
+// it exists, including aliases created outside tempmail.
+func (a *App) hmeLinkAll(ctx context.Context) error {
+	_, err := a.db.Exec(ctx, `INSERT OR IGNORE INTO address(name, source_meta) SELECT email, 'icloud-hme' FROM hme_aliases`)
+	return err
+}
+
+// hmeStoreAliases mirrors Apple's list for one account ("unused" flags survive).
 func (a *App) hmeStoreAliases(ctx context.Context, id int64, aliases []icloud.Alias) error {
 	tx, err := a.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -238,7 +244,10 @@ func (a *App) hmeStoreAliases(ctx context.Context, id int64, aliases []icloud.Al
 			return err
 		}
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return a.hmeLinkAll(ctx)
 }
 
 func (a *App) hmeReserve(ctx context.Context, id int64, label, note string, pooled bool) (icloud.Alias, error) {
@@ -252,7 +261,10 @@ func (a *App) hmeReserve(ctx context.Context, id int64, label, note string, pool
 		if _, err = a.db.Exec(ctx, hmeUpsert, al.Email, id, al.AnonymousID, al.Label, al.Note, 1, boolInt(pooled), appleTime(al.CreatedAt)); err != nil {
 			return err
 		}
-		_, err = a.db.Exec(ctx, `UPDATE hme_aliases SET managed = 1 WHERE email = ?`, al.Email)
+		if _, err = a.db.Exec(ctx, `UPDATE hme_aliases SET managed = 1 WHERE email = ?`, al.Email); err != nil {
+			return err
+		}
+		_, err = a.hmeEnsureAddress(ctx, al.Email, "icloud-hme")
 		return err
 	})
 	return out, err
@@ -372,8 +384,8 @@ func (a *App) hmeRecycleOne(ctx context.Context, accountID int64) (string, error
 	return c.Email, err
 }
 
-// hmeAllocate hands out a pooled alias first, then creates one on the least
-// used account that is not cooling down.
+// hmeAllocate hands out an unused alias first (pooled = never handed out and
+// never mailed), then creates one on the least used account not cooling down.
 func (a *App) hmeAllocate(ctx context.Context, accountID int64, label, note string) (string, error) {
 	if label == "" {
 		label = "tempmail " + time.Now().Format("2006-01-02 15:04")
@@ -388,7 +400,7 @@ func (a *App) hmeAllocate(ctx context.Context, accountID int64, label, note stri
 		if err := a.hmeRun(ctx, row.Int("account_id"), func(c *icloud.Client) error {
 			return c.UpdateMeta(ctx, row.Str("anonymous_id"), label, note)
 		}); err != nil {
-			log.Printf("hme: relabel pooled %s: %v", email, err)
+			log.Printf("hme: relabel unused %s: %v", email, err)
 		}
 		_, err := a.db.Exec(ctx, `UPDATE hme_aliases SET pooled = 0, label = ?, note = ? WHERE email = ?`, label, note, email)
 		return email, err
@@ -437,6 +449,9 @@ const hmeFillBudget = 4
 // stock: auto-fill accounts keep reserving until Apple reports the account
 // full, others up to pool_size. Refills never recycle existing aliases.
 func (a *App) RunHMEMaintenance(ctx context.Context) {
+	if err := a.hmeLinkAll(ctx); err != nil {
+		log.Printf("hme link: %v", err)
+	}
 	rows, err := a.db.Query(ctx, `SELECT id, pool_size, auto_fill,
 		(last_synced_at IS NULL OR last_synced_at < datetime('now', '-6 hours')) AS need_sync,
 		(last_validated_at IS NULL OR last_validated_at < datetime('now', '-30 minutes')) AS need_validate,
@@ -507,8 +522,7 @@ func hmeFail(w http.ResponseWriter, err error) {
 const hmeAccountSelect = `SELECT acc.*,
 	(SELECT count(*) FROM hme_aliases h WHERE h.account_id = acc.id) AS alias_total,
 	(SELECT count(*) FROM hme_aliases h WHERE h.account_id = acc.id AND h.active = 1) AS alias_active,
-	(SELECT count(*) FROM hme_aliases h WHERE h.account_id = acc.id AND h.active = 1 AND h.pooled = 1) AS alias_pooled,
-	(SELECT count(*) FROM hme_aliases h JOIN address ad ON ad.name = h.email WHERE h.account_id = acc.id) AS alias_linked
+	(SELECT count(*) FROM hme_aliases h WHERE h.account_id = acc.id AND h.active = 1 AND h.pooled = 1) AS alias_pooled
 	FROM hme_accounts acc`
 
 func (a *App) hmeAccountView(ctx context.Context, row db.Row) map[string]any {
@@ -529,7 +543,7 @@ func (a *App) hmeAccountView(ctx context.Context, row db.Row) map[string]any {
 	out := map[string]any{"has_proxy": row.Str("proxy") != "", "forward_options": opts, "forward_local": local, "forward_mailbox": mailbox,
 		"enabled": row.Int("enabled") == 1, "auto_fill": row.Int("auto_fill") == 1}
 	for _, k := range []string{"id", "name", "apple_id", "host", "status", "last_error", "forward_to", "cooldown_until", "pool_size", "observed_limit",
-		"last_validated_at", "last_synced_at", "created_at", "alias_total", "alias_active", "alias_pooled", "alias_linked"} {
+		"last_validated_at", "last_synced_at", "created_at", "alias_total", "alias_active", "alias_pooled"} {
 		out[k] = row[k]
 	}
 	return out
@@ -881,15 +895,13 @@ func (a *App) hmeListAliases(w http.ResponseWriter, r *http.Request) {
 	}
 	switch q.Get("state") {
 	case "active":
-		where = append(where, "h.active = 1 AND h.pooled = 0")
+		where = append(where, "h.active = 1")
 	case "inactive":
 		where = append(where, "h.active = 0")
-	case "pooled":
+	case "unused":
 		where = append(where, "h.pooled = 1")
-	case "linked":
-		where = append(where, "ad.id IS NOT NULL")
-	case "unlinked":
-		where = append(where, "ad.id IS NULL AND h.pooled = 0")
+	case "used":
+		where = append(where, "h.pooled = 0")
 	}
 	if s := strings.TrimSpace(q.Get("query")); s != "" {
 		where, args = append(where, "(h.email LIKE ? OR h.label LIKE ?)"), append(args, "%"+s+"%", "%"+s+"%")
@@ -944,18 +956,6 @@ func (a *App) hmeAlias(w http.ResponseWriter, r *http.Request) db.Row {
 	return row
 }
 
-func (a *App) hmeLinkAlias(w http.ResponseWriter, r *http.Request) {
-	row := a.hmeAlias(w, r)
-	if row == nil {
-		return
-	}
-	if _, err := a.db.Exec(r.Context(), `UPDATE hme_aliases SET pooled = 0, managed = 1 WHERE email = ?`, row.Str("email")); err != nil {
-		fail(w, err)
-		return
-	}
-	a.hmeIssueMailbox(r.Context(), w, row.Str("email"))
-}
-
 func (a *App) hmeUpdateAlias(w http.ResponseWriter, r *http.Request) {
 	row := a.hmeAlias(w, r)
 	if row == nil {
@@ -1007,34 +1007,34 @@ func (a *App) hmeToggleAlias(w http.ResponseWriter, r *http.Request) {
 	ok(w)
 }
 
-// hmeDeleteAlias removes the local mailbox; with remote=1 it also deletes the
-// alias at Apple, which frees a slot in the account's address cap.
+// hmeDeleteAlias permanently deletes the alias at Apple (freeing a slot in
+// the account's cap) together with its mailbox and mail. Mailboxes always
+// mirror aliases, so there is no local-only removal.
 func (a *App) hmeDeleteAlias(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	email := strings.ToLower(r.PathValue("email"))
-	if r.URL.Query().Get("remote") == "1" {
-		row := a.hmeAlias(w, r)
-		if row == nil {
-			return
-		}
-		if err := a.hmeRun(ctx, row.Int("account_id"), func(c *icloud.Client) error {
-			if row.Int("active") == 1 {
-				if err := c.Deactivate(ctx, row.Str("anonymous_id")); err != nil {
-					return err
-				}
-			}
-			return c.Delete(ctx, row.Str("anonymous_id"))
-		}); err != nil {
-			hmeFail(w, err)
-			return
-		}
-		if _, err := a.db.Exec(ctx, `DELETE FROM hme_aliases WHERE email = ?`, email); err != nil {
-			fail(w, err)
-			return
-		}
-		// A freed slot ends a "maximum reached" cooldown (1h), not a throttle one (30m).
-		_, _ = a.db.Exec(ctx, `UPDATE hme_accounts SET cooldown_until = NULL WHERE id = ? AND cooldown_until > datetime('now', '+30 minutes')`, row.Int("account_id"))
+	row := a.hmeAlias(w, r)
+	if row == nil {
+		return
 	}
+	email := row.Str("email")
+	if err := a.hmeRun(ctx, row.Int("account_id"), func(c *icloud.Client) error {
+		if row.Int("active") == 1 {
+			if err := c.Deactivate(ctx, row.Str("anonymous_id")); err != nil {
+				return err
+			}
+		}
+		return c.Delete(ctx, row.Str("anonymous_id"))
+	}); err != nil {
+		hmeFail(w, err)
+		return
+	}
+	if _, err := a.db.Exec(ctx, `DELETE FROM hme_aliases WHERE email = ?`, email); err != nil {
+		fail(w, err)
+		return
+	}
+	// A freed slot ends a "maximum reached" cooldown; throttle cooldowns
+	// (throttle_streak > 0) must run their course.
+	_, _ = a.db.Exec(ctx, `UPDATE hme_accounts SET cooldown_until = NULL WHERE id = ? AND throttle_streak = 0`, row.Int("account_id"))
 	if err := a.deleteAddressesWhere(ctx, `name = ?`, email); err != nil {
 		fail(w, err)
 		return

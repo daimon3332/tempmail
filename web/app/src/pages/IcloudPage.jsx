@@ -81,7 +81,7 @@ function AccountCard({ acc, onAction, onChanged }) {
     onChanged()
   }
   const remove = async () => {
-    if (!confirm(`删除账号「${acc.name}」？\n已接入的别名邮箱和邮件会保留，但不再自动分发新邮件。iCloud 端的别名不受影响。`)) return
+    if (!confirm(`删除账号「${acc.name}」？\n别名邮箱和邮件会保留，但不再自动分发新邮件。iCloud 端的别名不受影响。`)) return
     const r = await api(`/admin/hme/accounts/${acc.id}`, 'DELETE')
     if (r.status !== 200) alert(errText(r))
     onChanged()
@@ -99,8 +99,8 @@ function AccountCard({ acc, onAction, onChanged }) {
     </div>
     <div className="grid grid-cols-3 gap-2 text-center">
       <Stat label={acc.observed_limit ? '已用 / 实测上限' : '已用 / 上限≈750'} value={`${acc.alias_total}/${acc.observed_limit || '≈750'}`} hint="停用的别名也占名额；上限以 Apple 实际拒绝时的数量为准" />
-      <Stat label="已接入" value={acc.alias_linked} />
-      <Stat label="库存（待分配）" value={acc.auto_fill ? acc.alias_pooled : `${acc.alias_pooled}/${acc.pool_size}`} />
+      <Stat label="启用" value={acc.alias_active} />
+      <Stat label="未使用" value={acc.auto_fill ? acc.alias_pooled : `${acc.alias_pooled}/${acc.pool_size}`} hint="还没收到过邮件、也没被「新建」分配过的别名" />
     </div>
     <div className="rounded-md bg-muted/50 px-3 py-2 text-xs">
       <div className="flex items-center justify-between gap-2">
@@ -111,7 +111,7 @@ function AccountCard({ acc, onAction, onChanged }) {
     </div>
     <p className="text-xs text-muted-foreground">{acc.auto_fill
       ? (full ? `已达 Apple 上限（${acc.observed_limit}），自动补满已停止` : `自动补满中：每 30 分钟约 ${FILL_BUDGET} 个，直到 Apple 上限`)
-      : `库存目标 ${acc.pool_size} 个`}</p>
+      : `保持 ${acc.pool_size} 个未使用别名`}</p>
     {cooling && <p className="text-xs text-amber-600 dark:text-amber-400">Apple 限速冷却中，{cooldown.toLocaleTimeString()} 后继续创建</p>}
     {acc.last_error && <p className="break-words text-xs text-destructive">{acc.last_error}</p>}
     <div className="text-xs text-muted-foreground">同步于 {acc.last_synced_at ? fmtTime(acc.last_synced_at) : '—'} · 校验于 {acc.last_validated_at ? fmtTime(acc.last_validated_at) : '—'}</div>
@@ -257,8 +257,8 @@ function EditModal({ acc, onClose }) {
     </Field>
     {acc.has_proxy && <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={f.clearProxy} onChange={e => set('clearProxy', e.target.checked)} />清除代理</label>}
     <label className="flex items-start gap-2 text-sm"><input className="mt-1" type="checkbox" checked={f.auto_fill} onChange={e => set('auto_fill', e.target.checked)} />
-      <span>自动补满<span className="block text-[11px] text-muted-foreground">冷却结束后持续创建别名放入库存，每 30 分钟约 {FILL_BUDGET} 个，直到 Apple 提示数量已满。新建邮箱时直接从库存分配，立即可用。补满不会删除任何已有别名。</span></span></label>
-    {!f.auto_fill && <Field label="库存目标（0–20）" hint="后台按限速补足到该数量，遇到 Apple 限速自动冷却 30 分钟。">
+      <span>自动补满<span className="block text-[11px] text-muted-foreground">冷却结束后持续创建别名，每 30 分钟约 {FILL_BUDGET} 个，直到 Apple 提示数量已满。每个别名创建后立即可收信；「新建」时优先分配未使用的别名，无需等待限速。补满不会删除任何已有别名。</span></span></label>
+    {!f.auto_fill && <Field label="未使用别名数量（0–20）" hint="后台按限速补足到该数量，遇到 Apple 限速自动冷却。">
       <Input type="number" min={0} max={20} value={f.pool_size} onChange={e => set('pool_size', e.target.value)} />
     </Field>}
     <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={f.enabled} onChange={e => set('enabled', e.target.checked)} />启用（停用后不再保活、同步和创建）</label>
@@ -363,7 +363,7 @@ export function CreateAliasForm({ accounts, onCreated }) {
   }
   return <div className="space-y-3">
     <Field label="账号"><Select className="w-full" value={f.account_id} onChange={e => set('account_id', e.target.value)}>
-      <option value="">自动选择（优先库存，其次别名最少的账号）</option>
+      <option value="">自动选择（优先未使用的别名，其次别名最少的账号）</option>
       {usable.map(a => <option key={a.id} value={a.id}>{a.name}（{a.alias_active} 个启用）</option>)}
     </Select></Field>
     <Field label="标签" hint="显示在 iCloud 的别名列表中，便于识别用途。"><Input value={f.label} onChange={e => set('label', e.target.value)} placeholder="例如：注册 GitHub" /></Field>
@@ -403,16 +403,16 @@ function AliasTable({ accounts, onChanged }) {
     </div> },
     { key: 'account_name', title: '账号', render: a => <span className="text-xs">{a.account_name}</span> },
     { key: 'state', title: '状态', render: a => <div className="flex flex-wrap gap-1">
-      {a.pooled ? <Badge variant="muted">库存待用</Badge> : a.active ? <Badge variant="green">启用</Badge> : <Badge variant="amber">已停用</Badge>}
+      {a.active ? <Badge variant="green">启用</Badge> : <Badge variant="amber">已停用</Badge>}
+      {a.pooled ? <Badge variant="muted" title="还没收到过邮件，「新建」时会优先分配">未使用</Badge> : null}
       {a.pinned ? <Badge>保留</Badge> : null}
-      {!a.managed && !a.pooled ? <Badge variant="muted" title="非本系统创建（如 iPhone），不会被自动回收">外部</Badge> : null}
+      {!a.managed ? <Badge variant="muted" title="非本系统创建（如 iPhone），不会被自动回收">外部</Badge> : null}
     </div> },
-    { key: 'mailbox', title: '本地邮箱', render: a => a.address_id ? <a className="text-xs text-primary hover:underline" href={`/?address=${enc(a.email)}`}>{a.mail_count} 封邮件</a> : <span className="text-xs text-muted-foreground">未接入</span> },
+    { key: 'mailbox', title: '邮件', render: a => <a className="text-xs text-primary hover:underline" href={`/?address=${enc(a.email)}`}>{a.mail_count} 封</a> },
     { key: 'last_mail', title: '最后收信', render: a => <span className="text-xs text-muted-foreground">{a.last_mail_at ? fmtTime(a.last_mail_at) : '从未'}</span> },
     { key: 'created', title: '创建', render: a => <span className="text-xs text-muted-foreground">{fmtTime(a.apple_created_at || a.created_at)}</span> },
     { key: 'actions', title: '', render: a => <div className="flex flex-wrap justify-end gap-1">
-      {!a.address_id && a.active ? <Button size="sm" variant="outline" onClick={() => call(`/admin/hme/aliases/${enc(a.email)}/link`)}>接入</Button> : null}
-      {!a.pooled && <Button size="sm" variant="ghost" title={a.pinned ? '取消保留' : '保留：永不自动回收'} onClick={() => call(`/admin/hme/aliases/${enc(a.email)}/pin`, 'POST', { pinned: !a.pinned })}><Pin className={`h-3.5 w-3.5 ${a.pinned ? 'fill-current' : ''}`} /></Button>}
+      <Button size="sm" variant="ghost" title={a.pinned ? '取消保留' : '保留：永不自动回收'} onClick={() => call(`/admin/hme/aliases/${enc(a.email)}/pin`, 'POST', { pinned: !a.pinned })}><Pin className={`h-3.5 w-3.5 ${a.pinned ? 'fill-current' : ''}`} /></Button>
       <Button size="sm" variant="ghost" onClick={() => relabel(a)}>标签</Button>
       {a.active ? <Button size="sm" variant="ghost" onClick={() => confirm(`停用 ${a.email}？停用后发往该地址的邮件会被退回。`) && call(`/admin/hme/aliases/${enc(a.email)}/deactivate`)}>停用</Button>
         : <Button size="sm" variant="ghost" onClick={() => call(`/admin/hme/aliases/${enc(a.email)}/reactivate`)}>启用</Button>}
@@ -428,13 +428,12 @@ function AliasTable({ accounts, onChanged }) {
         </Select>
         <Select value={extra.state || ''} onChange={e => setExtra(x => ({ ...x, state: e.target.value }))}>
           <option value="">全部状态</option><option value="active">启用</option><option value="inactive">已停用</option>
-          <option value="pooled">池中待用</option><option value="linked">已接入</option><option value="unlinked">未接入</option>
+          <option value="unused">未使用</option><option value="used">已使用</option>
         </Select>
       </>} />
     {removing && <Modal title={`删除 ${removing.email}`} onClose={() => setRemoving(null)}><div className="space-y-3 text-sm">
-      <p className="text-muted-foreground">选择删除范围。删除本地邮箱会同时删除其中的邮件。</p>
-      <Button variant="outline" className="w-full" disabled={!removing.address_id} onClick={() => { call(`/admin/hme/aliases/${enc(removing.email)}`, 'DELETE'); setRemoving(null) }}>仅移除本地邮箱（保留 iCloud 别名）</Button>
-      <Button variant="destructive" className="w-full" onClick={() => { if (confirm('在 iCloud 永久删除后无法恢复，确定？')) { call(`/admin/hme/aliases/${enc(removing.email)}?remote=1`, 'DELETE'); setRemoving(null) } }}>彻底删除（iCloud 也删除，释放名额）</Button>
+      <p className="text-muted-foreground">将在 iCloud 永久删除该别名（释放名额）并删除本地邮箱和其中的邮件，无法恢复。</p>
+      <Button variant="destructive" className="w-full" onClick={() => { call(`/admin/hme/aliases/${enc(removing.email)}`, 'DELETE'); setRemoving(null) }}>永久删除</Button>
     </div></Modal>}
   </>
 }
@@ -453,13 +452,13 @@ function RecycleModal({ onClose }) {
     onClose()
   }
   return <Modal title="名额回收" onClose={onClose}>{!s ? <div className="flex justify-center p-6"><Spinner /></div> : <div className="space-y-3 text-sm">
-    <p className="text-muted-foreground">Apple 提示数量已满且库存为空时，新建邮箱会自动在 iCloud 永久删除 1 个代价最小的别名再创建。本地邮件保留。按顺序挑选：</p>
+    <p className="text-muted-foreground">Apple 提示数量已满、且没有未使用的别名时，新建邮箱会自动在 iCloud 永久删除 1 个代价最小的别名再创建。本地邮件保留。按顺序挑选：</p>
     <ol className="list-decimal space-y-1 pl-5 text-muted-foreground">
       <li>已停用的别名</li>
       <li>创建超过 <b className="text-foreground">{s.unusedDays}</b> 天且从未收到邮件</li>
       <li>最后收信超过 <b className="text-foreground">{s.idleDays}</b> 天中最久未用的</li>
     </ol>
-    <p className="text-xs text-muted-foreground">永不回收：标记「保留」的、已分配给用户的、库存中的、非本系统创建的（如 iPhone 上创建的）别名。</p>
+    <p className="text-xs text-muted-foreground">永不回收：标记「保留」的、已分配给用户的、未使用的、非本系统创建的（如 iPhone 上创建的）别名。</p>
     <label className="flex items-center gap-2"><input type="checkbox" checked={s.enabled} onChange={e => set('enabled', e.target.checked)} />启用自动回收</label>
     <div className="grid grid-cols-2 gap-2">
       <Field label="从未收信（天）"><Input type="number" min={1} value={s.unusedDays} onChange={e => set('unusedDays', e.target.value)} /></Field>

@@ -189,21 +189,21 @@ code.inline{background:var(--card);padding:2px 6px;border-radius:4px;font-size:1
 
 <h2 id="icloud">iCloud 隐藏邮箱</h2>
 <p>使用 iCloud+ 账号生成 <code class="inline">@icloud.com</code> 隐藏邮箱别名（Hide My Email）。<b>仅管理员可用</b>（<code class="inline">x-admin-auth</code> 或管理员用户的 <code class="inline">x-user-access-token</code>）。创建后别名就是普通邮箱：返回的 Address JWT 可直接用于 <code class="inline">/api/*</code> 收信、SSE、Webhook。别名不能发信。</p>
-<div class="note"><b>收信原理：</b>Apple 把所有别名的邮件转发到账号的「转发到」地址。把它设为本系统的中转邮箱（如 <code class="inline">relay@your-domain.com</code>）后，系统根据 Apple 添加的 <code class="inline">X-Icloud-Hme</code> 头把邮件实时分发到对应别名，来源还原为真实发件人。只有经 Cloudflare 收信通道、最上方验签结果为 <code class="inline">dkim=pass header.d=icloud.com</code>、收件地址 = 账号转发地址、头里的 f= 一致、别名已接入同时满足才分发，否则留在中转邮箱（直连 25 端口的邮件不分发）。</div>
+<div class="note"><b>收信原理：</b>Apple 把所有别名的邮件转发到账号的「转发到」地址。把它设为本系统的中转邮箱（如 <code class="inline">relay@your-domain.com</code>）后，系统根据 Apple 添加的 <code class="inline">X-Icloud-Hme</code> 头把邮件实时分发到对应别名，来源还原为真实发件人。只有经 Cloudflare 收信通道、最上方验签结果为 <code class="inline">dkim=pass header.d=icloud.com</code>、收件地址 = 账号转发地址、头里的 f= 一致、别名已知同时满足才分发，否则留在中转邮箱（直连 25 端口的邮件不分发）。</div>
 
 <h3>频率与数量限制（Apple 侧）</h3>
 <table><tr><th>限制</th><th>数值</th><th>系统行为</th></tr>
 <tr><td>创建频率</td><td>每账号<b>一批约 5 个</b>，恢复时间不固定（社区报告 30 分钟～2 小时，家庭共享成员各自独立计算）。2026-11-04 实测：连续创建第 6 个即被拒（错误码 <code class="inline">-41015</code>），37 分钟后仍被拒</td><td>被拒后冷却并指数退避：30 → 60 → 120 → 240 分钟（成功一次即重置）。冷却期内直接返回 429，不再请求 Apple；自动选择账号时跳过冷却中的账号</td></tr>
 <tr><td>数量上限</td><td>同时存在约 <b>750 个</b>（Apple 未公布，社区报告 720–1047）。<b>停用的别名仍占名额</b>，彻底删除后才释放</td><td>Apple 返回 “maximum number of email addresses” 时记录当时数量为该账号的实测上限，按下方回收策略处理；无可回收时冷却 1 小时并尝试其他账号</td></tr>
 <tr><td>单次耗时</td><td>约 2–3 秒（生成 + 保留两次请求）</td><td>客户端超时建议 ≥ 60 秒</td></tr>
-<tr><td>自动补满（库存）</td><td>每账号可开关，默认开启：冷却结束后持续创建放入库存，每 30 分钟最多 4 个，被限速则按上面的退避等待，直到 Apple 提示数量已满；关闭时按「库存目标」补足</td><td>新建时优先从库存分配，立即可用、不受限速影响；补满只新增，<b>不会删除任何已有别名</b></td></tr>
-<tr><td>名额回收</td><td>默认开启。仅在「数量已满且库存为空」时由新建触发，每次在 iCloud 永久删除 1 个后重试：① 已停用 ② 创建超 30 天且从未收信 ③ 最后收信超 90 天中最久的（天数可配）</td><td>永不回收：标记保留、已分配给用户、库存中、非本系统创建（如 iPhone）的别名；本地邮件保留。设置与预览：<code class="inline">GET/POST /admin/hme/recycle</code></td></tr>
+<tr><td>自动补满</td><td>每账号可开关，默认开启：冷却结束后持续创建，每 30 分钟最多 4 个，被限速则按上面的退避等待，直到 Apple 提示数量已满；关闭时保持 <code class="inline">pool_size</code> 个未使用别名</td><td>每个别名（含 iPhone 上创建、同步发现的）都自动建好本地邮箱，立即可收信。未收过信的标记为「未使用」，新建时优先分配，不受限速影响；收到第一封信后自动转为已使用。补满只新增，<b>不会删除任何已有别名</b></td></tr>
+<tr><td>名额回收</td><td>默认开启。仅在「数量已满且没有未使用别名」时由新建触发，每次在 iCloud 永久删除 1 个后重试：① 已停用 ② 创建超 30 天且从未收信 ③ 最后收信超 90 天中最久的（天数可配）</td><td>永不回收：标记保留、已分配给用户、未使用、非本系统创建（如 iPhone）的别名；本地邮件保留。设置与预览：<code class="inline">GET/POST /admin/hme/recycle</code></td></tr>
 <tr><td>地址格式</td><td>由 Apple 随机生成，<b>不能指定</b></td><td>标签 / 备注可自定义</td></tr>
 </table>
 <div class="note"><b>批量创建建议：</b>按「每账号每 30 分钟 ≤ 5 个」规划；收到 429 后不要立即重试，冷却截止时间见 <code class="inline">GET /admin/hme/accounts</code> 的 <code class="inline">cooldown_until</code>（UTC）。需要更高吞吐时添加更多 iCloud 账号，系统会自动在账号间分配。频繁触发限速可能导致 Apple 账号受限。</div>
 
 <h3>POST /admin/hme/aliases</h3>
-<p><b>请求 JSON：</b><code class="inline">account_id:number?</code>（省略则自动：优先预生成池，其次启用别名最少且不在冷却中的账号）、<code class="inline">label:string?</code>、<code class="inline">note:string?</code>。</p>
+<p><b>请求 JSON：</b><code class="inline">account_id:number?</code>（省略则自动：优先未使用的别名，其次启用别名最少且不在冷却中的账号）、<code class="inline">label:string?</code>、<code class="inline">note:string?</code>。</p>
 <p><b>响应 200：</b>与 <code class="inline">/api/new_address</code> 相同：<code class="inline">address</code>、<code class="inline">jwt</code>、<code class="inline">address_id</code>。</p>
 <pre>curl -X POST https://tempmail.333186.xyz/admin/hme/aliases \
   -H "x-admin-auth: $ADMIN_PASSWORD" -H "content-type: application/json" \
@@ -223,11 +223,10 @@ code.inline{background:var(--card);padding:2px 6px;border-radius:4px;font-size:1
 <tr><td><span class="method post">POST</span><code>/admin/hme/login</code></td><td>账号密码登录 <code class="inline">{apple_id, password, name?, host?, proxy?, account_id?}</code>；需要双重认证时返回 <code class="inline">{login_id, need_code, phones}</code></td></tr>
 <tr><td><span class="method post">POST</span><code>/admin/hme/login/{login_id}/code</code></td><td>提交验证码 <code class="inline">{code, phone_id?}</code>（10 分钟内有效）</td></tr>
 <tr><td><span class="method post">POST</span><code>/admin/hme/login/{login_id}/sms</code></td><td>改用短信发送验证码 <code class="inline">{phone_id}</code></td></tr>
-<tr><td><span class="method get">GET</span><code>/admin/hme/aliases</code></td><td>别名列表，参数 <code class="inline">limit, offset, account_id, state(active|inactive|pooled|linked|unlinked), query</code></td></tr>
-<tr><td><span class="method post">POST</span><code>/admin/hme/aliases/{email}/link</code></td><td>为已有别名（如 iPhone 上创建的）接入本地邮箱，返回 JWT</td></tr>
+<tr><td><span class="method get">GET</span><code>/admin/hme/aliases</code></td><td>别名列表，参数 <code class="inline">limit, offset, account_id, state(active|inactive|unused|used), query</code>；<code class="inline">pooled=1</code> 表示未使用</td></tr>
 <tr><td><span class="method post">PATCH</span><code>/admin/hme/aliases/{email}</code></td><td>修改标签/备注 <code class="inline">{label, note}</code>（同步到 iCloud）</td></tr>
 <tr><td><span class="method post">POST</span><code>/admin/hme/aliases/{email}/deactivate</code> · <code>/reactivate</code></td><td>停用 / 启用（停用后发往该地址的邮件被 Apple 退回，仍占名额）</td></tr>
-<tr><td><span class="method del">DELETE</span><code>/admin/hme/aliases/{email}</code></td><td>移除本地邮箱及邮件；加 <code class="inline">?remote=1</code> 同时在 iCloud 永久删除并释放名额</td></tr>
+<tr><td><span class="method del">DELETE</span><code>/admin/hme/aliases/{email}</code></td><td>在 iCloud 永久删除别名（释放名额），并删除本地邮箱和邮件</td></tr>
 <tr><td><span class="method post">POST</span><code>/admin/hme/aliases/{email}/pin</code></td><td>保留标记 <code class="inline">{pinned}</code>，保留的别名永不自动回收</td></tr>
 <tr><td><span class="method get">GET</span><code>/admin/hme/recycle</code> · <span class="method post">POST</span></td><td>回收设置 <code class="inline">{enabled, unusedDays, idleDays}</code> 与各账号下一个回收候选预览</td></tr>
 </table>

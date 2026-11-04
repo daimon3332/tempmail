@@ -70,6 +70,34 @@ func TestRouteHMEOnlyTrustsLinkedAliasesAtForwardTarget(t *testing.T) {
 	}
 }
 
+func TestUnusedAliasGetsMailboxAndTurnsUsedOnFirstMail(t *testing.T) {
+	a := newRuntimeTestApp(t, nil)
+	ctx := context.Background()
+	for _, q := range []string{
+		`INSERT INTO hme_accounts(id, name, forward_to) VALUES(1, 'a', 'relay@example.com')`,
+		`INSERT INTO hme_aliases(email, account_id, pooled, managed) VALUES('stock@icloud.com', 1, 1, 1), ('iphone@icloud.com', 1, 0, 0)`,
+	} {
+		if _, err := a.db.Exec(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := a.hmeLinkAll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := a.db.Count(ctx, `SELECT count(*) FROM address WHERE name IN ('stock@icloud.com', 'iphone@icloud.com')`); n != 2 {
+		t.Fatalf("mailboxes created=%d, want 2", n)
+	}
+	if err := a.hmeLinkAll(ctx); err != nil {
+		t.Fatalf("relink must be idempotent: %v", err)
+	}
+	if _, _, ok := a.RouteHME(ctx, "relay@example.com", hmeMail("p=stock@icloud.com; f=relay@example.com; s=x@y.com")); !ok {
+		t.Fatal("unused alias did not receive mail")
+	}
+	if pooled, _, _ := a.db.ScanInt(ctx, `SELECT pooled FROM hme_aliases WHERE email = 'stock@icloud.com'`); pooled != 0 {
+		t.Fatal("alias still marked unused after receiving mail")
+	}
+}
+
 func TestRecycleCandidateOrderAndProtection(t *testing.T) {
 	a := newRuntimeTestApp(t, nil)
 	ctx := context.Background()
