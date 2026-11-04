@@ -197,7 +197,7 @@ func (a *App) tgGetMail(w http.ResponseWriter, r *http.Request) {
 	}
 	readJSON(r, &req)
 	ctx := r.Context()
-	if contains(a.cfg.AdminPasswords, r.Header.Get("x-admin-auth")) {
+	if secretIn(a.adminPasswords(ctx), r.Header.Get("x-admin-auth")) {
 		a.tgGetMailByID(w, ctx, req.MailID)
 		return
 	}

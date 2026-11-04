@@ -296,7 +296,7 @@ func (a *App) extDomains(w http.ResponseWriter, r *http.Request) {
 // Routing worker). Auth: x-ingest-token, or the admin password.
 func (a *App) extIngest(w http.ResponseWriter, r *http.Request) {
 	tok := r.Header.Get("x-ingest-token")
-	if !((a.cfg.IngestToken != "" && tok == a.cfg.IngestToken) || contains(a.cfg.AdminPasswords, r.Header.Get("x-admin-auth"))) {
+	if !(secretIn([]string{a.cfg.IngestToken}, tok) || secretIn(a.adminPasswords(r.Context()), r.Header.Get("x-admin-auth"))) {
 		text(w, 401, "Invalid ingest token")
 		return
 	}

@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -79,7 +78,7 @@ func (a *App) sseHandler(w http.ResponseWriter, r *http.Request) {
 		case <-ctx.Done():
 			return
 		case ev := <-s.ch:
-			b, _ := jsonMarshal(ev)
+			b, _ := json.Marshal(ev)
 			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", evType(ev), b)
 			fl.Flush()
 		case <-keepalive.C:
@@ -88,8 +87,6 @@ func (a *App) sseHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 }
-
-func jsonMarshal(v any) ([]byte, error) { return json.Marshal(v) }
 
 func evType(ev map[string]any) string {
 	if t, ok := ev["type"].(string); ok {
@@ -110,5 +107,3 @@ func (a *App) notifyGlobal(event string, data map[string]any) {
 	}
 	broadcast("", m)
 }
-
-var _ = context.Background

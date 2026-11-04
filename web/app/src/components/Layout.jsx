@@ -1,5 +1,5 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { Sun, Moon, Mail, Users, LogOut, Settings, BookOpen } from 'lucide-react'
+import { Sun, Moon, Mail, Users, LogOut, Settings, BookOpen, Cloud } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { state, clearAddress, clearUser, clearAdmin } from '../lib/api'
 
@@ -7,7 +7,7 @@ export default function Layout({ children }) {
   const { t, dark, setDark, locale, setLocale } = useApp()
   const nav = useNavigate()
   const location = useLocation()
-  const items = [['/', t('mail'), Mail], ...(state.userJwt && state.isAdmin ? [['/user', '用户与权限', Users], ['/settings', '系统设置', Settings]] : [])]
+  const items = [['/', t('mail'), Mail], ...(state.userJwt && state.isAdmin ? [['/user', '用户与权限', Users], ['/icloud', 'iCloud', Cloud], ['/settings', '系统设置', Settings]] : [])]
   const logout = () => { clearAddress(); clearUser(); clearAdmin(); nav('/login', { replace: true }) }
   return (
     <div className="app-shell min-h-screen">

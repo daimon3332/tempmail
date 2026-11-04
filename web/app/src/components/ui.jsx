@@ -35,6 +35,8 @@ export function Badge({ className, variant = 'default', ...props }) {
     default: 'bg-primary/10 text-primary',
     muted: 'bg-muted text-muted-foreground',
     green: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
+    amber: 'bg-amber-500/10 text-amber-700 dark:text-amber-400',
+    red: 'bg-destructive/10 text-destructive',
     gray: 'bg-muted text-muted-foreground',
   }
   return <span className={cn('inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium', v[variant], className)} {...props} />

@@ -23,7 +23,12 @@ func (a *App) checkTurnstile(ctx context.Context, token string) error {
 		return errors.New("Captcha token is required")
 	}
 	form := url.Values{"secret": {a.cfg.TurnstileSecretKey}, "response": {token}}
-	resp, err := http.PostForm("https://challenges.cloudflare.com/turnstile/v0/siteverify", form)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://challenges.cloudflare.com/turnstile/v0/siteverify", strings.NewReader(form.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
 	if err != nil {
 		return err
 	}
@@ -137,6 +142,28 @@ func ipMatches(pattern, ip string) bool {
 	return strings.Contains(ip, pattern)
 }
 
+// pruneGuards drops counters from previous days and expired rate windows so
+// the in-memory maps stay bounded.
+func pruneGuards(now time.Time) {
+	today := "|" + now.UTC().Format("2006-01-02")
+	ipCounters.Range(func(k, _ any) bool {
+		if !strings.HasSuffix(k.(string), today) {
+			ipCounters.Delete(k)
+		}
+		return true
+	})
+	rateLocks.Range(func(k, v any) bool {
+		e := v.(*limiterEntry)
+		e.mu.Lock()
+		stale := now.After(e.resets)
+		e.mu.Unlock()
+		if stale {
+			rateLocks.Delete(k)
+		}
+		return true
+	})
+}
+
 // ---- in-memory rate limiter (per key+IP, windowed) ----
 
 type limiterEntry struct {
@@ -169,8 +196,7 @@ func (a *App) rateLimitedPath(p string) bool {
 	switch {
 	case p == "/api/new_address", p == "/api/send_mail",
 		p == "/external/api/send_mail",
-		p == "/user_api/register", p == "/user_api/verify_code", p == "/user_api/login",
-		p == "/user_api/address/" && false:
+		p == "/user_api/register", p == "/user_api/verify_code", p == "/user_api/login":
 		return true
 	}
 	if strings.HasPrefix(p, "/user_api/address/") && strings.HasSuffix(p, "/send_mail") {

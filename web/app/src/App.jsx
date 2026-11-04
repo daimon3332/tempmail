@@ -4,6 +4,7 @@ import UserPage from './pages/UserPage'
 import LoginPage from './pages/LoginPage'
 import WorkspacePage from './pages/WorkspacePage'
 import SettingsPage from './pages/SettingsPage'
+import IcloudPage from './pages/IcloudPage'
 import { state } from './lib/api'
 
 function Home() {
@@ -27,6 +28,7 @@ export default function App() {
       <Route path="/mail" element={<Protected addressOnly><MailPage /></Protected>} />
       <Route path="/settings" element={<Protected adminOnly><SettingsPage /></Protected>} />
       <Route path="/user" element={<Protected adminOnly><UserPage /></Protected>} />
+      <Route path="/icloud" element={<Protected adminOnly><IcloudPage /></Protected>} />
       <Route path="/user/oauth2/callback" element={<Protected userOnly><UserPage /></Protected>} />
       <Route path="/admin" element={<Protected adminOnly><Navigate to="/settings" replace /></Protected>} />
       <Route path="/telegram_mail" element={<Protected addressOnly><MailPage /></Protected>} />

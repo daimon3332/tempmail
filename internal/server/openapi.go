@@ -42,11 +42,32 @@ func (a *App) openapi(w http.ResponseWriter, r *http.Request) {
 		struct{ p, m, s, a string }{"/admin/auto_reply/rules", "post", "Save administrator auto reply rule", admin},
 		struct{ p, m, s, a string }{"/admin/auto_reply/rules/{id}", "delete", "Delete administrator auto reply rule", admin},
 		struct{ p, m, s, a string }{"/admin/mail_webhook/deliveries", "get", "List recent mail webhook delivery attempts", admin},
+		struct{ p, m, s, a string }{"/admin/hme/accounts", "get", "List iCloud Hide My Email accounts", admin},
+		struct{ p, m, s, a string }{"/admin/hme/accounts", "post", "Add iCloud account from cookies", admin},
+		struct{ p, m, s, a string }{"/admin/hme/accounts/{id}", "patch", "Update iCloud account", admin},
+		struct{ p, m, s, a string }{"/admin/hme/accounts/{id}", "delete", "Delete iCloud account", admin},
+		struct{ p, m, s, a string }{"/admin/hme/accounts/{id}/cookies", "put", "Replace iCloud session cookies", admin},
+		struct{ p, m, s, a string }{"/admin/hme/accounts/{id}/sync", "post", "Validate session and sync aliases", admin},
+		struct{ p, m, s, a string }{"/admin/hme/accounts/{id}/forward", "post", "Set Hide My Email forward-to address", admin},
+		struct{ p, m, s, a string }{"/admin/hme/relay", "post", "Create relay mailbox", admin},
+		struct{ p, m, s, a string }{"/admin/hme/login", "post", "Apple ID sign-in", admin},
+		struct{ p, m, s, a string }{"/admin/hme/login/{id}/code", "post", "Submit two-factor code", admin},
+		struct{ p, m, s, a string }{"/admin/hme/login/{id}/sms", "post", "Request SMS two-factor code", admin},
+		struct{ p, m, s, a string }{"/admin/hme/aliases", "get", "List iCloud aliases", admin},
+		struct{ p, m, s, a string }{"/admin/hme/aliases", "post", "Create iCloud alias mailbox (Apple limit ~5 per 30 min per account; 429 when throttled)", admin},
+		struct{ p, m, s, a string }{"/admin/hme/aliases/{email}", "patch", "Update alias label/note", admin},
+		struct{ p, m, s, a string }{"/admin/hme/aliases/{email}", "delete", "Remove alias mailbox (remote=1 also deletes at Apple)", admin},
+		struct{ p, m, s, a string }{"/admin/hme/aliases/{email}/link", "post", "Link existing alias to a mailbox", admin},
+		struct{ p, m, s, a string }{"/admin/hme/aliases/{email}/deactivate", "post", "Deactivate alias", admin},
+		struct{ p, m, s, a string }{"/admin/hme/aliases/{email}/reactivate", "post", "Reactivate alias", admin},
+		struct{ p, m, s, a string }{"/admin/hme/aliases/{email}/pin", "post", "Pin alias (never auto-recycled)", admin},
+		struct{ p, m, s, a string }{"/admin/hme/recycle", "get", "Get alias recycle settings and preview", admin},
+		struct{ p, m, s, a string }{"/admin/hme/recycle", "post", "Save alias recycle settings", admin},
 	)
 	for _, e := range entries {
 		add(e.p, e.m, e.s, e.a)
 	}
-	for _, p := range []string{"/api/new_address", "/admin/new_address", "/admin/users", "/admin/runtime_config", "/api/send_mail", "/admin/send_mail", "/user_api/profile", "/admin/user_limits/{user_id}"} {
+	for _, p := range []string{"/api/new_address", "/admin/new_address", "/admin/hme/aliases", "/admin/users", "/admin/runtime_config", "/api/send_mail", "/admin/send_mail", "/user_api/profile", "/admin/user_limits/{user_id}"} {
 		if item, ok := paths[p].(map[string]any); ok {
 			for method, value := range item {
 				v := value.(map[string]any)
