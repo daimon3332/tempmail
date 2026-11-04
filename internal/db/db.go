@@ -14,7 +14,8 @@ import (
 const DBVersion = "v0.0.8"
 
 // Schema is identical to the upstream cloudflare_temp_email schema so that a
-// D1 dump can be imported verbatim. role_configs is the only addition.
+// D1 dump can be imported verbatim. Additions: role_configs, user quota
+// tables and the hme_* tables for iCloud Hide My Email.
 const schema = `
 CREATE TABLE IF NOT EXISTS raw_mails (
     id INTEGER PRIMARY KEY,
@@ -185,6 +186,47 @@ CREATE TABLE IF NOT EXISTS quota_audit (
     detail TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS hme_accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    apple_id TEXT,
+    host TEXT DEFAULT 'icloud.com',
+    proxy TEXT,
+    cookies TEXT,
+    service_url TEXT,
+    dsid TEXT,
+    forward_to TEXT,
+    forward_options TEXT,
+    status TEXT DEFAULT 'pending',
+    last_error TEXT,
+    cooldown_until DATETIME,
+    pool_size INTEGER DEFAULT 0,
+    auto_fill INTEGER DEFAULT 1,
+    observed_limit INTEGER,
+    throttle_streak INTEGER DEFAULT 0,
+    enabled INTEGER DEFAULT 1,
+    last_validated_at DATETIME,
+    last_synced_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS hme_aliases (
+    email TEXT PRIMARY KEY,
+    account_id INTEGER NOT NULL,
+    anonymous_id TEXT,
+    label TEXT,
+    note TEXT,
+    active INTEGER DEFAULT 1,
+    pooled INTEGER DEFAULT 0,
+    pinned INTEGER DEFAULT 0,
+    managed INTEGER DEFAULT 0,
+    last_mail_at DATETIME,
+    apple_created_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_hme_aliases_account_id ON hme_aliases(account_id);
 `
 
 // Columns added over time upstream; applied idempotently for imported dumps.
@@ -196,6 +238,12 @@ var patches = []struct{ table, column, ddl string }{
 	{"raw_mails", "metadata", "ALTER TABLE raw_mails ADD COLUMN metadata TEXT"},
 	{"raw_mails", "raw_blob", "ALTER TABLE raw_mails ADD COLUMN raw_blob BLOB"},
 	{"raw_mails", "is_unread", "ALTER TABLE raw_mails ADD COLUMN is_unread INTEGER"},
+	{"hme_accounts", "auto_fill", "ALTER TABLE hme_accounts ADD COLUMN auto_fill INTEGER DEFAULT 1"},
+	{"hme_accounts", "observed_limit", "ALTER TABLE hme_accounts ADD COLUMN observed_limit INTEGER"},
+	{"hme_accounts", "throttle_streak", "ALTER TABLE hme_accounts ADD COLUMN throttle_streak INTEGER DEFAULT 0"},
+	{"hme_aliases", "pinned", "ALTER TABLE hme_aliases ADD COLUMN pinned INTEGER DEFAULT 0"},
+	{"hme_aliases", "managed", "ALTER TABLE hme_aliases ADD COLUMN managed INTEGER DEFAULT 0; UPDATE hme_aliases SET managed = 1 WHERE email IN (SELECT name FROM address)"},
+	{"hme_aliases", "last_mail_at", "ALTER TABLE hme_aliases ADD COLUMN last_mail_at DATETIME; UPDATE hme_aliases SET last_mail_at = (SELECT max(created_at) FROM raw_mails WHERE address = hme_aliases.email)"},
 }
 
 type DB struct {

@@ -24,6 +24,10 @@ type Hooks interface {
 	OnMailStored(ctx context.Context, address string, mailID int64, raw string, parsed *mailparse.Mail)
 	MailFeatureEnabled(ctx context.Context, name string) bool
 	MailJunkCheckList(ctx context.Context) []string
+	// RouteHME maps mail Apple forwarded from a Hide My Email alias back to
+	// the alias mailbox; ok is false for ordinary mail. Only the ingest path
+	// (behind Cloudflare's DKIM verification) uses it.
+	RouteHME(ctx context.Context, to string, parsed *mailparse.Mail) (alias, sender string, ok bool)
 }
 
 type Server struct {
@@ -218,11 +222,25 @@ func (s *Server) Ingest(ctx context.Context, from, to string, raw []byte) (int64
 	if parsed != nil {
 		messageID = parsed.MessageID
 	}
+	from, to = s.route(ctx, from, to, parsed)
 	id, err := s.store(ctx, from, to, messageID, raw, parsed)
 	if errors.Is(err, ErrQuotaExceeded) {
 		return 0, nil
 	}
 	return id, err
+}
+
+func (s *Server) route(ctx context.Context, from, to string, parsed *mailparse.Mail) (string, string) {
+	if s.hooks == nil {
+		return from, to
+	}
+	if alias, sender, ok := s.hooks.RouteHME(ctx, to, parsed); ok {
+		if sender != "" {
+			from = sender
+		}
+		return from, alias
+	}
+	return from, to
 }
 
 func (s *Server) store(ctx context.Context, from, to, messageID string, raw []byte, parsed *mailparse.Mail) (int64, error) {

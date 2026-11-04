@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"io"
 	"io/fs"
@@ -174,7 +175,7 @@ func (a *App) auth(w http.ResponseWriter, r *http.Request) {
 	}
 	apiKeyOK := a.isAPIKeyValid(r)
 	if len(a.sitePasswords(r.Context())) > 0 && !apiKeyOK && p != "/events" && !strings.HasPrefix(p, "/open_api") && !strings.HasPrefix(p, "/telegram/") {
-		if !contains(a.sitePasswords(r.Context()), r.Header.Get("x-custom-auth")) {
+		if !secretIn(a.sitePasswords(r.Context()), r.Header.Get("x-custom-auth")) {
 			text(w, 401, "Need Custom Auth Password")
 			return
 		}
@@ -252,7 +253,7 @@ func (a *App) auth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) isAdmin(r *http.Request) bool {
-	if len(a.adminPasswords(r.Context())) > 0 && contains(a.adminPasswords(r.Context()), r.Header.Get("x-admin-auth")) {
+	if secretIn(a.adminPasswords(r.Context()), r.Header.Get("x-admin-auth")) {
 		return true
 	}
 	if a.cfg.AdminUserRole != "" {
@@ -334,6 +335,17 @@ func contains(list []string, v string) bool {
 	return false
 }
 
+// secretIn compares credentials in constant time.
+func secretIn(list []string, v string) bool {
+	found := 0
+	for _, s := range list {
+		if v != "" && s != "" {
+			found |= subtle.ConstantTimeCompare([]byte(s), []byte(v))
+		}
+	}
+	return found == 1
+}
+
 func text(w http.ResponseWriter, code int, msg string) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(code)
@@ -363,7 +375,7 @@ func readJSON(r *http.Request, v any) error {
 
 func fail(w http.ResponseWriter, err error) {
 	log.Printf("error: %v", err)
-	text(w, 500, "Error "+err.Error())
+	text(w, 500, "Internal server error")
 }
 
 func clientIP(r *http.Request, trusted []string) string {

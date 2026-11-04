@@ -55,6 +55,7 @@ func (a *App) routes() {
 
 	a.userRoutes()
 	a.adminRoutes()
+	a.hmeRoutes()
 	a.extRoutes()
 	a.telegramRoutes()
 	m.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { text(w, 404, "Not Found") })
@@ -661,6 +662,10 @@ func (a *App) apiTestWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	address, _ := addressOf(r)
+	if !a.webhookAllowed(r, address) {
+		text(w, 403, "Webhook is not allowed for this address")
+		return
+	}
 	var s webhookSettings
 	if err := readJSON(r, &s); err != nil {
 		text(w, 400, "Invalid input")
@@ -670,6 +675,7 @@ func (a *App) apiTestWebhook(w http.ResponseWriter, r *http.Request) {
 		text(w, 400, err.Error())
 		return
 	}
+	s.public = true
 	row, _ := a.db.QueryOne(r.Context(), `SELECT * FROM raw_mails WHERE address = ? ORDER BY RANDOM() LIMIT 1`, address)
 	var id any = "0"
 	raw := "test raw email"

@@ -13,10 +13,13 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 
 	"tempmail/internal/db"
@@ -399,6 +402,8 @@ type webhookSettings struct {
 	Secret         string `json:"secret,omitempty"`
 	TimeoutSeconds int    `json:"timeout_seconds,omitempty"`
 	MaxRetries     int    `json:"max_retries,omitempty"`
+	// public restricts delivery to public IPs (mailbox-owned webhooks).
+	public bool
 }
 
 func defaultWebhookSettings() webhookSettings {
@@ -451,6 +456,29 @@ func validateWebhookSettings(s webhookSettings) error {
 	return nil
 }
 
+var cgnat = netip.MustParsePrefix("100.64.0.0/10")
+
+// publicTransport refuses non-public targets at dial time, which also covers
+// DNS rebinding and redirects into internal networks.
+var publicTransport = &http.Transport{
+	DialContext: (&net.Dialer{Timeout: 10 * time.Second, Control: func(_, address string, _ syscall.RawConn) error {
+		host, _, err := net.SplitHostPort(address)
+		if err != nil {
+			return err
+		}
+		ip, err := netip.ParseAddr(host)
+		if err != nil {
+			return err
+		}
+		ip = ip.Unmap()
+		if !ip.IsGlobalUnicast() || ip.IsPrivate() || cgnat.Contains(ip) {
+			return errors.New("webhook target must be a public address")
+		}
+		return nil
+	}}).DialContext,
+	TLSHandshakeTimeout: 10 * time.Second,
+}
+
 func sendWebhook(s webhookSettings, values map[string]any) (int, error) {
 	body := s.Body
 	for k, v := range values {
@@ -487,6 +515,9 @@ func sendWebhook(s webhookSettings, values map[string]any) (int, error) {
 		timeout = 10
 	}
 	client := &http.Client{Timeout: time.Duration(timeout) * time.Second}
+	if s.public {
+		client.Transport = publicTransport
+	}
 	resp, err := client.Do(req)
 	if err != nil {
 		return 0, err
@@ -563,6 +594,7 @@ func (a *App) TriggerWebhook(ctx context.Context, address string, mailID int64, 
 	if !adminSettings.EnableAllowList || contains(adminSettings.AllowList, address) {
 		var userHook webhookSettings
 		if a.jsonSetting(ctx, "temp-mail-webhook-user-settings:"+address, &userHook) && userHook.Enabled {
+			userHook.public = true
 			hooks = append(hooks, userHook)
 		}
 	}

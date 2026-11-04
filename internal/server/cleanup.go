@@ -131,6 +131,10 @@ func (a *App) deleteAddressesWhere(ctx context.Context, cond string, args ...any
 	return nil
 }
 
+// notHMEAlias keeps iCloud alias mailboxes out of automatic address cleanup;
+// they are managed (and freed at Apple) from the iCloud page.
+const notHMEAlias = `name NOT IN (SELECT email FROM hme_aliases)`
+
 func (a *App) cleanup(ctx context.Context, cleanType string, days int) error {
 	if cleanType == "" || days < 0 || days > 1000 {
 		return errors.New("Invalid cleanup config")
@@ -140,13 +144,13 @@ func (a *App) cleanup(ctx context.Context, cleanType string, days int) error {
 	log.Printf("cleanup %s before %d days", cleanType, days)
 	switch cleanType {
 	case "inactiveAddress":
-		return a.deleteAddressesWhere(ctx, fmt.Sprintf(`id IN (SELECT id FROM address WHERE updated_at < datetime('now', '%s') ORDER BY updated_at, id LIMIT %d)`, mod, batch))
+		return a.deleteAddressesWhere(ctx, fmt.Sprintf(`id IN (SELECT id FROM address WHERE updated_at < datetime('now', '%s') AND %s ORDER BY updated_at, id LIMIT %d)`, mod, notHMEAlias, batch))
 	case "addressCreated":
-		return a.deleteAddressesWhere(ctx, fmt.Sprintf(`id IN (SELECT id FROM address WHERE created_at < datetime('now', '%s') ORDER BY created_at, id LIMIT %d)`, mod, batch))
+		return a.deleteAddressesWhere(ctx, fmt.Sprintf(`id IN (SELECT id FROM address WHERE created_at < datetime('now', '%s') AND %s ORDER BY created_at, id LIMIT %d)`, mod, notHMEAlias, batch))
 	case "unboundAddress":
-		return a.deleteAddressesWhere(ctx, fmt.Sprintf(`id NOT IN (SELECT address_id FROM users_address) AND created_at < datetime('now', '%s')`, mod))
+		return a.deleteAddressesWhere(ctx, fmt.Sprintf(`id NOT IN (SELECT address_id FROM users_address) AND created_at < datetime('now', '%s') AND %s`, mod, notHMEAlias))
 	case "emptyAddress":
-		return a.deleteAddressesWhere(ctx, fmt.Sprintf(`name NOT IN (SELECT DISTINCT address FROM raw_mails WHERE address IS NOT NULL) AND created_at < datetime('now', '%s')`, mod))
+		return a.deleteAddressesWhere(ctx, fmt.Sprintf(`name NOT IN (SELECT DISTINCT address FROM raw_mails WHERE address IS NOT NULL) AND created_at < datetime('now', '%s') AND %s`, mod, notHMEAlias))
 	case "mails":
 		_, err := a.db.Exec(ctx, `DELETE FROM raw_mails WHERE id IN (SELECT id FROM raw_mails WHERE created_at < datetime('now', ?) ORDER BY created_at, id LIMIT ?)`, mod, batch)
 		return err
@@ -231,12 +235,18 @@ func StartScheduler(ctx context.Context, a *App, every time.Duration) {
 	go func() {
 		t := time.NewTicker(every)
 		defer t.Stop()
+		hme := time.NewTicker(10 * time.Minute)
+		defer hme.Stop()
+		a.RunHMEMaintenance(ctx)
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-t.C:
 				a.RunScheduledCleanup(ctx)
+				pruneGuards(time.Now())
+			case <-hme.C:
+				a.RunHMEMaintenance(ctx)
 			}
 		}
 	}()

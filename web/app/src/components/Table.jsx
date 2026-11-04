@@ -30,7 +30,7 @@ export function PagedTable({ path, queryKey, columns, filters, pageSize: initial
     <Card className="p-4">
       <div className="mb-3 flex flex-wrap items-center gap-2">
         {filters && filters({ setExtra, extra, q, setQ })}
-        {(q || Object.keys(extra).length) && (
+        {(!!q || Object.keys(extra).length > 0) && (
           <Button size="sm" variant="ghost" onClick={() => { setQ(''); setExtra({}); setPage(0) }}>✕ 清除</Button>
         )}
       </div>
