@@ -200,7 +200,7 @@ code.inline{background:var(--card);padding:2px 6px;border-radius:4px;font-size:1
 <tr><td>名额回收</td><td>默认开启。仅在「数量已满且没有未使用别名」时由新建触发，每次在 iCloud 永久删除 1 个后重试：① 已停用 ② 创建超 30 天且从未收信 ③ 最后收信超 90 天中最久的（天数可配）</td><td>永不回收：标记保留、已分配给用户、未使用、非本系统创建（如 iPhone）的别名；本地邮件保留。设置与预览：<code class="inline">GET/POST /admin/hme/recycle</code></td></tr>
 <tr><td>地址格式</td><td>由 Apple 随机生成，<b>不能指定</b></td><td>标签 / 备注可自定义</td></tr>
 </table>
-<div class="note"><b>批量创建建议：</b>按「每账号每 30 分钟 ≤ 5 个」规划；收到 429 后不要立即重试，冷却截止时间见 <code class="inline">GET /admin/hme/accounts</code> 的 <code class="inline">cooldown_until</code>（UTC）。需要更高吞吐时添加更多 iCloud 账号，系统会自动在账号间分配。频繁触发限速可能导致 Apple 账号受限。</div>
+<div class="note"><b>批量创建建议：</b>按「每账号每 30 分钟 ≤ 5 个」规划；收到 429 后不要立即重试，冷却截止时间见 <code class="inline">GET /admin/hme/accounts</code> 的 <code class="inline">cooldown_until</code>（UTC）。需要更高吞吐时添加更多 iCloud 账号，系统会自动在账号间分配。频繁触发限速可能导致 Apple 账号受限。<br>会话失效时账号状态变为 <code class="inline">expired</code>，自动创建暂停（已有别名照常收信）；配置了 Telegram 机器人时会通知全局推送名单中的管理员。</div>
 
 <h3>POST /admin/hme/aliases</h3>
 <p><b>请求 JSON：</b><code class="inline">account_id:number?</code>（省略则自动：优先未使用的别名，其次启用别名最少且不在冷却中的账号）、<code class="inline">label:string?</code>、<code class="inline">note:string?</code>。</p>

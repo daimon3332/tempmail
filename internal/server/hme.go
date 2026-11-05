@@ -153,6 +153,10 @@ func (a *App) hmeRun(ctx context.Context, id int64, fn func(*icloud.Client) erro
 	case errors.Is(err, icloud.ErrUnauthorized):
 		status, lastErr = "expired", "iCloud session expired; sign in again or update cookies"
 		log.Printf("hme: account %d session expired", id)
+		if row.Str("status") != "expired" && a.tg != nil {
+			msg := fmt.Sprintf("iCloud 账号「%s」登录已失效，自动创建已暂停（已有别名照常收信）。请在 %s/icloud 重新登录或更新 Cookie。", row.Str("name"), a.origin())
+			go a.tg.NotifyAdmins(context.Background(), msg)
+		}
 	default:
 		lastErr = err.Error()
 	}

@@ -294,6 +294,18 @@ func (b *Bot) reply(chatID int64, text string, markup any) {
 	}
 }
 
+// NotifyAdmins sends a plain message to the global push list (administrators).
+func (b *Bot) NotifyAdmins(ctx context.Context, text string) {
+	if !b.Enabled() {
+		return
+	}
+	for _, t := range b.Settings(ctx).GlobalMailPushList {
+		if id, err := strconv.ParseInt(t, 10, 64); err == nil {
+			b.reply(id, text, nil)
+		}
+	}
+}
+
 // HandleUpdate processes one webhook/polling update.
 func (b *Bot) HandleUpdate(ctx context.Context, raw []byte) {
 	var u update
