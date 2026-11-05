@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { KeyRound, UserRound } from 'lucide-react'
 import { Button, Input } from '../components/ui'
-import api, { setAdmin, setUser, setAddress, setAccessToken } from '../lib/api'
+import api, { setUser, setAddress, setAccessToken } from '../lib/api'
 import { sha256 } from '../lib/utils'
 
 export default function LoginPage() {
@@ -28,7 +28,7 @@ export default function LoginPage() {
       }
       if (!identifier.trim() || !password) { setError('请输入用户名和密码'); return }
       const r = await api('/user_api/login', 'POST', { username: identifier.trim(), email: identifier.trim(), password: await sha256(password), cf_token: '' })
-      if (r.status === 200 && r.data?.jwt) { setUser(r.data.jwt, !!r.data.is_admin); setAccessToken(r.data.access_token || ''); if (r.data.is_admin) setAdmin(password); nav('/') } else setError(typeof r.data === 'string' ? r.data : '用户名或密码错误')
+      if (r.status === 200 && r.data?.jwt) { setUser(r.data.jwt, !!r.data.is_admin); setAccessToken(r.data.access_token || ''); nav('/') } else setError(typeof r.data === 'string' ? r.data : '用户名或密码错误')
     } catch { setError('网络请求失败，请稍后重试') } finally { setSubmitting(false) }
   }
   return <div className="min-h-screen bg-muted/30 px-4"><div className="mx-auto flex min-h-screen max-w-md items-center"><div className="w-full rounded-2xl border border-border bg-background p-7 shadow-sm">
